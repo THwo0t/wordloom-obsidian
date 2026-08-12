@@ -1,0 +1,94 @@
+{
+  "name": "wordloom-obsidian",
+  "version": "0.1.0",
+  "productName": "Wordloom",
+  "description": "Cambridge + DeepSeek powered vocabulary collector for Obsidian",
+  "author": {
+    "name": "THwo0t",
+    "email": "226656162+THwo0t@users.noreply.github.com",
+    "url": "https://github.com/THwo0t"
+  },
+  "desktopName": "wordloom",
+  "homepage": "https://github.com/THwo0t/wordloom-obsidian#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/THwo0t/wordloom-obsidian.git"
+  },
+  "bugs": {
+    "url": "https://github.com/THwo0t/wordloom-obsidian/issues"
+  },
+  "main": "src/main.js",
+  "type": "commonjs",
+  "bin": {
+    "wl": "scripts/wordloom-quick.js",
+    "wordloom-quick": "scripts/wordloom-quick.js"
+  },
+  "scripts": {
+    "start": "electron .",
+    "quick": "electron . --quick",
+    "compact:note": "node scripts/compact-note.js",
+    "install:command": "npm link",
+    "test": "node --test",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js && node --check src/renderer/quick.js && node --check scripts/wordloom-quick.js",
+    "pack": "electron-builder --dir",
+    "dist:linux": "electron-builder --linux AppImage deb"
+  },
+  "keywords": [
+    "obsidian",
+    "cambridge-dictionary",
+    "deepseek",
+    "ielts",
+    "vocabulary"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2"
+  },
+  "allowScripts": {
+    "electron@43.4.0": true
+  },
+  "build": {
+    "appId": "io.github.thwo0t.wordloom",
+    "productName": "Wordloom",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/wl",
+        "to": "wl"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Education",
+      "icon": "build/icon.png",
+      "synopsis": "Cambridge and DeepSeek vocabulary collector for Obsidian",
+      "maintainer": "THwo0t <226656162+THwo0t@users.noreply.github.com>",
+      "description": "Search Cambridge Dictionary with DeepSeek and safely append compact IELTS vocabulary cards to Obsidian.",
+      "syncDesktopName": true,
+      "executableName": "wordloom",
+      "artifactName": "Wordloom-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "afterInstall": "build/after-install.sh",
+      "afterRemove": "build/after-remove.sh"
+    }
+  }
+}

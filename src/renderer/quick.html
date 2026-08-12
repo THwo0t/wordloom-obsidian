@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'none'">
+  <title>Wordloom 快速查词</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="quick.css">
+</head>
+<body>
+  <main class="quick-shell">
+    <header class="quick-titlebar">
+      <div class="brand"><span class="brand-mark"></span> 快速采词</div>
+      <div class="window-actions">
+        <button class="quick-main" id="open-main">打开主应用</button>
+        <button class="window-button close" data-window="close" title="关闭并退出">×</button>
+      </div>
+    </header>
+    <section class="quick-content">
+      <form id="quick-form" class="quick-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <input id="quick-input" autocomplete="off" spellcheck="false" placeholder="查一个词，按 Enter…" autofocus>
+        <button type="submit">查询</button>
+      </form>
+      <div class="quick-hint"><span>Enter 查询</span><span>Alt + Enter 加入笔记</span><span>Esc 关闭</span></div>
+      <div id="quick-state" class="quick-state">
+        <div class="quick-orb">w</div>
+        <h1>此刻遇见了什么词？</h1>
+        <p>查询 Cambridge 后，可立即写进 IELTS words。</p>
+      </div>
+      <article id="quick-result" class="quick-result hidden"></article>
+    </section>
+  </main>
+  <div class="toast-stack" id="toasts"></div>
+  <script src="quick.js"></script>
+</body>
+</html>
