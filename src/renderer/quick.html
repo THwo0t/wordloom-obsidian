@@ -23,13 +23,32 @@
         <input id="quick-input" autocomplete="off" spellcheck="false" placeholder="查一个词，按 Enter…" autofocus>
         <button type="submit">查询</button>
       </form>
-      <div class="quick-hint"><span>Enter 查询</span><span>Alt + Enter 加入笔记</span><span>Esc 关闭</span></div>
+      <div class="quick-hint"><span>Enter 查询</span><span>Alt + Enter 加入详解</span><span>Esc 关闭</span></div>
+
+      <div class="quick-manual-heading">
+        <div><strong>直接插入</strong><span>只加入单词总表</span></div>
+        <kbd>Alt + M</kbd>
+      </div>
+      <form id="quick-manual-form" class="quick-manual">
+        <div class="quick-manual-field">
+          <input id="quick-manual-word" autocomplete="off" spellcheck="false" placeholder="英文原词">
+          <span>Tab ↹</span>
+        </div>
+        <div class="quick-manual-field meaning">
+          <input id="quick-manual-meaning" autocomplete="off" placeholder="中文释义">
+          <span>Enter ↵</span>
+        </div>
+        <button type="submit" id="quick-manual-submit">AI 检查</button>
+      </form>
+      <div class="quick-manual-hint">不查 Cambridge，不生成下方完整详解</div>
+
       <div id="quick-state" class="quick-state">
         <div class="quick-orb">w</div>
         <h1>此刻遇见了什么词？</h1>
         <p>查询 Cambridge 后，可立即写进 IELTS words。</p>
       </div>
       <article id="quick-result" class="quick-result hidden"></article>
+      <article id="quick-manual-result" class="quick-result quick-manual-result hidden"></article>
     </section>
   </main>
   <div class="toast-stack" id="toasts"></div>

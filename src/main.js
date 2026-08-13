@@ -104,9 +104,9 @@ function createQuickWindow(word = '') {
 
   quickWindow = new BrowserWindow({
     width: 620,
-    height: 520,
+    height: 640,
     minWidth: 520,
-    minHeight: 360,
+    minHeight: 480,
     show: false,
     frame: false,
     alwaysOnTop: true,
@@ -144,8 +144,12 @@ function sendAddShortcut() {
 }
 
 function sendManualShortcut() {
-  quickOnlySession = false;
-  const target = createMainWindow();
+  const focused = BrowserWindow.getFocusedWindow();
+  let target = focused === quickWindow || focused === mainWindow ? focused : quickWindow || mainWindow;
+  if (!target || target.isDestroyed()) {
+    quickOnlySession = false;
+    target = createMainWindow();
+  }
   const send = () => {
     if (!target || target.isDestroyed()) return;
     target.show();
