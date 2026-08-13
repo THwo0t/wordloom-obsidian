@@ -5,8 +5,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { appendManualToNote, appendToNote, backupDirectoryFor, collapseWordloomBlocks, collapseWordloomEntries, containsWord, renderTemplate, unifyVocabularyNote } = require('../src/services/obsidian');
-const { buildUnifiedVocabularyDocument, isStrictEnglishAnswer, parseMasterTable } = require('../src/services/vocabulary');
+const { appendManualToNote, appendToNote, backupDirectoryFor, collapseWordloomBlocks, collapseWordloomEntries, containsWord, renderTemplate, replaceMasterTableEntries, unifyVocabularyNote } = require('../src/services/obsidian');
+const {
+  buildUnifiedVocabularyDocument,
+  isStrictEnglishAnswer,
+  parseMasterTable,
+  publicQuizEntries,
+  quizPromptFromMeaning,
+  renderMasterTable
+} = require('../src/services/vocabulary');
 
 const result = {
   query: 'mitigate',
@@ -151,8 +158,46 @@ test('migrates a real note transactionally with a complete backup', async (conte
 test('strict Chinese-to-English matching accepts listed spellings only', () => {
   assert.equal(isStrictEnglishAnswer('mould', 'mould / mold (n./v.)'), true);
   assert.equal(isStrictEnglishAnswer('MOLD.', 'mould / mold (n./v.)'), true);
+  assert.equal(isStrictEnglishAnswer('time honoured', 'time-honoured / time-honored'), true);
+  assert.equal(isStrictEnglishAnswer('feel obliged to do something', 'feel obliged to do sth.'), true);
+  assert.equal(isStrictEnglishAnswer('refer to someone as something', 'refer to sb. as sth.'), true);
+  assert.equal(isStrictEnglishAnswer('vent my feelings', 'vent one’s feelings'), true);
   assert.equal(isStrictEnglishAnswer('molds', 'mould / mold (n./v.)'), false);
   assert.equal(isStrictEnglishAnswer('mitigate the risk', 'mitigate'), false);
+});
+
+test('builds quiz prompts without leaking English study notes', () => {
+  assert.equal(quizPromptFromMeaning('国际的（domestic 的反义词）'), '国际的');
+  assert.equal(quizPromptFromMeaning('包含；吸收；incorporate A into B 将 A 纳入 B'), '包含；吸收');
+  assert.equal(quizPromptFromMeaning('把 A 纳入 B'), '把 A 纳入 B');
+  const note = renderMasterTable([
+    { word: 'international', meaning: '国际的（domestic 的反义词）' },
+    { word: 'placeholder', meaning: 'English only' }
+  ]);
+  const entries = publicQuizEntries(note);
+  assert.equal(entries[0].prompt, '国际的');
+  assert.equal(entries[0].zhEnReady, true);
+  assert.equal(entries[1].zhEnReady, false);
+});
+
+test('reorganizes only the protected table and preserves all surrounding bytes', async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'wordloom-reorganize-'));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const notePath = path.join(directory, 'IELTS Words.md');
+  const details = `\n\n## Wordloom 新增词汇\n\n<!-- wordloom:mitigate -->\n> [!abstract]- **mitigate** — 减轻\n> byte-exact detail\n<!-- /wordloom:mitigate -->\n`;
+  const original = `# IELTS Words\n\n${renderMasterTable([{ word: 'aggregate', meaning: '总数；总数' }])}${details}`;
+  await fs.writeFile(notePath, original);
+
+  const response = await replaceMasterTableEntries(notePath, [
+    { word: 'aggregate', meaning: '总数' },
+    { word: 'mitigate', meaning: '减轻' }
+  ]);
+  const written = await fs.readFile(notePath, 'utf8');
+  assert.equal(response.status, 'reorganized');
+  assert.equal(response.wordCount, 2);
+  assert.equal(written.endsWith(details), true);
+  assert.equal(await fs.readFile(response.backupPath, 'utf8'), original);
+  assert.equal(response.checks.outsideTableByteExact, true);
 });
 
 test('adds manual vocabulary only to the protected master table and preserves details', async (context) => {

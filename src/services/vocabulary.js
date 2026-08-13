@@ -25,17 +25,39 @@ function normalizeEnglishAnswer(value) {
     .toLocaleLowerCase('en-US')
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
+    .replace(/[‐‑‒–—−]/g, '-')
     .replace(/\s+/g, ' ')
     .replace(/[.!?。！？]+$/u, '')
     .trim();
 }
 
+function expandMechanicalAnswerVariants(value) {
+  let variants = [String(value || '').trim()];
+  const expand = (pattern, replacements) => {
+    const expanded = [];
+    for (const variant of variants) {
+      expanded.push(variant);
+      if (!pattern.test(variant)) continue;
+      for (const replacement of replacements) expanded.push(variant.replace(pattern, replacement));
+    }
+    variants = expanded;
+  };
+
+  expand(/\bsb\.(?=\s|$)/iu, ['sb', 'somebody', 'someone']);
+  expand(/\bsth\.(?=\s|$)/iu, ['sth', 'something']);
+  expand(/\bone[’']s\b/iu, ["one's", 'my', 'your', 'his', 'her', 'our', 'their']);
+  expand(/(?<=\p{L})[-‐‑‒–—−](?=\p{L})/u, [' ']);
+  return variants;
+}
+
 function answerVariantsFromWord(value) {
   const withoutPos = stripPartOfSpeech(value);
-  return [...new Set(withoutPos
+  const variants = withoutPos
     .split(/\s+\/\s+/u)
+    .flatMap(expandMechanicalAnswerVariants)
     .map(normalizeEnglishAnswer)
-    .filter(Boolean))];
+    .filter(Boolean);
+  return [...new Set(variants)];
 }
 
 function vocabularyKey(value) {
@@ -191,6 +213,21 @@ function briefMeaningFromResult(result) {
   return '待补充释义';
 }
 
+function quizPromptFromMeaning(value) {
+  const source = cleanInline(value).replace(/^—\s*/u, '');
+  const withoutEnglishNotes = source
+    .replace(/（[^（）]*[A-Za-z]{2,}[^（）]*）/gu, '')
+    .replace(/\([^()]*[A-Za-z]{2,}[^()]*\)/gu, '');
+  const chineseClauses = withoutEnglishNotes
+    .split(/；/u)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause && !/[A-Za-z]{2,}/u.test(clause));
+  return (chineseClauses.join('；') || withoutEnglishNotes || source)
+    .replace(/；{2,}/gu, '；')
+    .replace(/^；|；$/gu, '')
+    .trim();
+}
+
 function updateMasterTable(text, entry) {
   const source = String(text || '');
   const normalized = normalizeEntry(entry);
@@ -265,13 +302,18 @@ function buildUnifiedVocabularyDocument(text) {
 }
 
 function publicQuizEntries(text) {
-  return parseMasterTable(text).map((entry, offset) => ({
-    id: String(offset + 1),
-    index: offset + 1,
-    word: entry.word,
-    meaning: entry.meaning,
-    answers: answerVariantsFromWord(entry.word)
-  }));
+  return parseMasterTable(text).map((entry, offset) => {
+    const prompt = quizPromptFromMeaning(entry.meaning);
+    return {
+      id: String(offset + 1),
+      index: offset + 1,
+      word: entry.word,
+      meaning: entry.meaning,
+      prompt,
+      zhEnReady: /\p{Script=Han}/u.test(prompt),
+      answers: answerVariantsFromWord(entry.word)
+    };
+  });
 }
 
 module.exports = {
@@ -290,6 +332,7 @@ module.exports = {
   parseMasterTable,
   parseWordloomBlocks,
   publicQuizEntries,
+  quizPromptFromMeaning,
   renderMasterTable,
   updateMasterTable,
   vocabularyKey

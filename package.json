@@ -1,6 +1,6 @@
 {
   "name": "wordloom-obsidian",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "productName": "Wordloom",
   "description": "Cambridge + DeepSeek powered vocabulary collector for Obsidian",
   "author": {
@@ -30,7 +30,7 @@
     "unify:note": "node scripts/unify-note.js",
     "install:command": "npm link",
     "test": "node --test",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/services/deepseek.js && node --check src/services/obsidian.js && node --check src/services/vocabulary.js && node --check src/renderer/app.js && node --check src/renderer/quick.js && node --check scripts/wordloom-quick.js && node --check scripts/unify-note.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/services/deepseek.js && node --check src/services/obsidian.js && node --check src/services/vocabulary.js && node --check src/renderer/app.js && node --check src/renderer/quick.js && node --check scripts/wordloom-quick.js && node --check scripts/unify-note.js && node --check scripts/tidy-note-for-dictation.js",
     "pack": "electron-builder --dir",
     "dist:linux": "electron-builder --linux AppImage deb"
   },

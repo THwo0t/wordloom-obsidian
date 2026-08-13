@@ -417,9 +417,20 @@ function normalizedEnglish(value) {
     .toLocaleLowerCase('en-US')
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
+    .replace(/[‐‑‒–—−]/g, '-')
     .replace(/\s+/g, ' ')
     .replace(/[.!?。！？]+$/u, '')
     .trim();
+}
+
+function quizSelection() {
+  const total = state.quiz.library.length;
+  const start = Math.max(1, Math.min(total, Number($('#quiz-range-start').value) || 1));
+  const end = Math.max(start, Math.min(total, Number($('#quiz-range-end').value) || total));
+  const ranged = state.quiz.library.filter((entry) => entry.index >= start && entry.index <= end);
+  const direction = $('#quiz-direction').value;
+  const entries = direction === 'zh-en' ? ranged.filter((entry) => entry.zhEnReady !== false) : ranged;
+  return { direction, start, end, ranged, entries, skipped: ranged.length - entries.length };
 }
 
 function updateQuizRangeHint() {
@@ -428,9 +439,8 @@ function updateQuizRangeHint() {
     $('#quiz-range-hint').textContent = '请先读取词表。';
     return;
   }
-  const start = Math.max(1, Math.min(total, Number($('#quiz-range-start').value) || 1));
-  const end = Math.max(start, Math.min(total, Number($('#quiz-range-end').value) || total));
-  $('#quiz-range-hint').textContent = `将测试词表第 ${start}–${end} 条，共 ${end - start + 1} 题。`;
+  const selection = quizSelection();
+  $('#quiz-range-hint').textContent = `将测试词表第 ${selection.start}–${selection.end} 条，共 ${selection.entries.length} 题${selection.skipped ? `；${selection.skipped} 条没有可用中文提示，已跳过` : ''}。`;
 }
 
 async function loadQuizLibrary() {
@@ -453,7 +463,9 @@ async function loadQuizLibrary() {
   $('#quiz-range-end').max = String(total);
   $('#quiz-range-start').value = '1';
   $('#quiz-range-end').value = String(total);
-  $('#quiz-library-status').textContent = `已读取 ${total} 条词汇；编号与 Obsidian 单词总表一致。`;
+  const ready = response.entries.filter((entry) => entry.zhEnReady !== false).length;
+  const sanitized = response.entries.filter((entry) => entry.prompt && entry.prompt !== entry.meaning).length;
+  $('#quiz-library-status').textContent = `已读取 ${total} 条词汇；中译英可用 ${ready} 条${sanitized ? `，${sanitized} 条提示已去除英文泄题备注` : ''}。`;
   $('#quiz-start').disabled = false;
   updateQuizRangeHint();
 }
@@ -508,7 +520,7 @@ function renderQuizQuestion() {
   $('#quiz-mode-label').textContent = state.quiz.direction === 'zh-en' ? '中译英 · 严格' : '英译中 · AI';
   $('#quiz-source-index').textContent = `词表 #${entry.index}`;
   $('#quiz-prompt-label').textContent = state.quiz.direction === 'zh-en' ? '根据中文写出英文' : '写出这个词的中文含义';
-  $('#quiz-prompt').textContent = state.quiz.direction === 'zh-en' ? entry.meaning : entry.word;
+  $('#quiz-prompt').textContent = state.quiz.direction === 'zh-en' ? entry.prompt : entry.word;
   $('#quiz-answer').value = '';
   $('#quiz-answer').disabled = false;
   $('#quiz-submit').disabled = false;
@@ -523,13 +535,13 @@ function renderQuizQuestion() {
 function startQuiz() {
   const total = state.quiz.library.length;
   if (!total) return toast('单词总表还没有可用词条。', 'error');
-  const start = Math.max(1, Math.min(total, Number($('#quiz-range-start').value) || 1));
-  const end = Math.max(start, Math.min(total, Number($('#quiz-range-end').value) || total));
-  let questions = state.quiz.library.filter((entry) => entry.index >= start && entry.index <= end);
+  const selection = quizSelection();
+  let questions = selection.entries;
+  if (!questions.length) return toast('这个范围没有适合当前方向的题目。', 'error');
   if ($('#quiz-order').value === 'random') questions = shuffled(questions);
   state.quiz.questions = questions;
   state.quiz.position = 0;
-  state.quiz.direction = $('#quiz-direction').value;
+  state.quiz.direction = selection.direction;
   state.quiz.attempts = new Map();
   state.quiz.sessionId = crypto.randomUUID();
   $('#quiz-setup').classList.add('hidden');
@@ -620,6 +632,7 @@ function wireEvents() {
   $('#quiz-answer-form').addEventListener('submit', (event) => { event.preventDefault(); submitQuizAnswer(); });
   $('#quiz-range-start').addEventListener('input', updateQuizRangeHint);
   $('#quiz-range-end').addEventListener('input', updateQuizRangeHint);
+  $('#quiz-direction').addEventListener('change', updateQuizRangeHint);
   $('#clear-key').addEventListener('click', async () => {
     const response = await window.wordloom.clearApiKey();
     if (!response.ok) return toast(response.error.message, 'error');

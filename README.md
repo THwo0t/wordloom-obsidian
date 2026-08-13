@@ -10,7 +10,7 @@ Wordloom 是一款面向 Obsidian 的本地 IELTS 生词采集器。输入单词
 - Obsidian 原生折叠 Callout：平时每个词只占一行，点击后查看完整词卡
 - 单一编号词表：Wordloom 新词同步写入总表，同时保留后方完整折叠详解
 - 主界面与悬浮窗都同时显示 Cambridge 查询和“直接插入”：手动填写英文和中文释义，由 DeepSeek 简单校对后只加入总表
-- 内置默写：中译英严格匹配，英译中立即亮出答案并由 AI 后台判分
+- 内置默写：中译英采用规范化严格匹配，英译中立即亮出答案并由 AI 后台判分
 - 支持按顺序、随机以及指定词表编号范围出题，状态栏实时显示正确、错误与判分中数量
 - 重复词检测、写前完整备份、并发修改检测、原子替换及写后 SHA-256 校验
 - API Key 由 Electron `safeStorage` 保存，不会暴露给页面脚本或写入仓库
@@ -23,14 +23,14 @@ Wordloom 是一款面向 Obsidian 的本地 IELTS 生词采集器。输入单词
 AppImage：
 
 ```bash
-chmod +x Wordloom-0.2.0-x86_64.AppImage
-./Wordloom-0.2.0-x86_64.AppImage
+chmod +x Wordloom-0.2.1-x86_64.AppImage
+./Wordloom-0.2.1-x86_64.AppImage
 ```
 
 Debian / Ubuntu：
 
 ```bash
-sudo apt install ./Wordloom-0.2.0-amd64.deb
+sudo apt install ./Wordloom-0.2.1-amd64.deb
 ```
 
 安装 `.deb` 后可使用短命令：
@@ -93,6 +93,8 @@ wl mitigate
 ```
 
 对于不需要查询 Cambridge 的简单词，主界面和悬浮窗的查词栏下方都始终有一条“直接插入”栏：输入英文后按 `Tab` 到中文释义，按 `Enter` 交给 DeepSeek 做简短校对。检查通过时直接加入总表；需要纠正时会先显示原文、建议版本和原因，由用户确认后再写入。这一路径不会创建后方详解。
+
+中译英仍然在本地严格判分，但会把已登记的英美拼写、`sb.`/`someone`、`sth.`/`something`、`one’s`/具体物主代词以及连字符/空格视为机械等价写法。中文提示中的英文学习备注会自动隐藏；没有有效中文提示的条目不会进入中译英题组。
 
 每次修改现有笔记都会：
 

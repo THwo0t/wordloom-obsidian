@@ -13,6 +13,7 @@ const {
   mergeEntries,
   parseMasterTable,
   publicQuizEntries,
+  renderMasterTable,
   updateMasterTable,
   vocabularyKey
 } = require('./vocabulary');
@@ -754,6 +755,86 @@ function unifyVocabularyNote(notePath, { sourceText = '' } = {}) {
   return queued;
 }
 
+function replaceMasterTableEntries(notePath, entries, { operation = 'reorganize-vocabulary-table' } = {}) {
+  const queuedOperation = async () => {
+    const resolved = validateNotePath(notePath);
+    const [currentBuffer, noteStat] = await Promise.all([fs.readFile(resolved), fs.stat(resolved)]);
+    const before = validateExistingNote(currentBuffer, resolved);
+    const current = currentBuffer.toString('utf8');
+    const currentRange = masterTableRange(current);
+    if (!currentRange) throw new NoteProtectionError('没有找到受保护的单词总表，已停止整理。', 'MASTER_TABLE_MISSING');
+
+    const normalizedEntries = mergeEntries(entries);
+    if (!normalizedEntries.length) throw new NoteProtectionError('整理结果没有词条，已停止写入。', 'NO_VOCABULARY_FOUND');
+    const table = renderMasterTable(normalizedEntries);
+    const nextText = `${current.slice(0, currentRange.start)}${table}${current.slice(currentRange.end)}`;
+    if (nextText === current) {
+      return {
+        status: 'unchanged',
+        path: resolved,
+        wordCount: normalizedEntries.length,
+        checks: { originalHash: before.hash, outsideTableByteExact: true, markersBalanced: true }
+      };
+    }
+
+    const nextBuffer = Buffer.from(nextText, 'utf8');
+    validateExistingNote(nextBuffer, resolved);
+    const nextRange = masterTableRange(nextText);
+    const currentOutside = `${current.slice(0, currentRange.start)}${current.slice(currentRange.end)}`;
+    const nextOutside = `${nextText.slice(0, nextRange.start)}${nextText.slice(nextRange.end)}`;
+    if (currentOutside !== nextOutside) {
+      throw new NoteProtectionError('单词总表之外的内容发生变化，已停止整理。', 'OUTSIDE_TABLE_CHANGED');
+    }
+    const parsed = parseMasterTable(nextText);
+    if (JSON.stringify(parsed) !== JSON.stringify(normalizedEntries)) {
+      throw new NoteProtectionError('整理后的总表无法无损解析，已停止写入。', 'TABLE_ROUNDTRIP_MISMATCH');
+    }
+
+    const latestBuffer = await fs.readFile(resolved);
+    if (!latestBuffer.equals(currentBuffer)) {
+      throw new NoteProtectionError('Obsidian 在整理前修改了笔记。本次操作已取消，请重试。', 'CONCURRENT_EDIT');
+    }
+    const backupPath = await createBackup(resolved, currentBuffer, noteStat.mode, before.hash);
+    await atomicReplace(resolved, nextBuffer, noteStat.mode);
+    const writtenBuffer = await fs.readFile(resolved);
+    if (!writtenBuffer.equals(nextBuffer)) {
+      await atomicReplace(resolved, currentBuffer, noteStat.mode);
+      throw new NoteProtectionError('整理写后内容不一致，已自动恢复原笔记。', 'POST_WRITE_MISMATCH', { backupPath });
+    }
+    const after = validateExistingNote(writtenBuffer, resolved);
+    const written = writtenBuffer.toString('utf8');
+    const writtenRange = masterTableRange(written);
+    const writtenOutside = `${written.slice(0, writtenRange.start)}${written.slice(writtenRange.end)}`;
+    if (writtenOutside !== currentOutside || JSON.stringify(parseMasterTable(written)) !== JSON.stringify(normalizedEntries)) {
+      await atomicReplace(resolved, currentBuffer, noteStat.mode);
+      throw new NoteProtectionError('整理写后校验失败，已自动恢复原笔记。', 'POST_WRITE_CHECK_FAILED', { backupPath });
+    }
+
+    const checks = {
+      backupCreated: true,
+      outsideTableByteExact: true,
+      detailedBlocksUntouched: true,
+      wordCount: normalizedEntries.length,
+      originalHash: before.hash,
+      resultHash: after.hash,
+      markersBalanced: after.markersBalanced
+    };
+    const receiptPath = await writeReceipt(backupPath, {
+      version: 1,
+      operation,
+      writtenAt: new Date().toISOString(),
+      notePath: resolved,
+      backupPath,
+      checks
+    }).catch(() => '');
+    return { status: 'reorganized', path: resolved, wordCount: normalizedEntries.length, backupPath, receiptPath, checks };
+  };
+
+  const queued = writeQueue.then(queuedOperation, queuedOperation);
+  writeQueue = queued.catch(() => {});
+  return queued;
+}
+
 async function readVocabularyEntries(notePath) {
   const resolved = validateNotePath(notePath);
   const buffer = await fs.readFile(resolved);
@@ -814,6 +895,7 @@ module.exports = {
   markerId,
   readNoteSummary,
   readVocabularyEntries,
+  replaceMasterTableEntries,
   renderTemplate,
   sha256,
   templateValues,
