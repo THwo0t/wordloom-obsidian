@@ -6,7 +6,18 @@ const state = {
   currentResultId: '',
   activeRequestId: '',
   busy: false,
-  launchCommand: ''
+  launchCommand: '',
+  quiz: {
+    library: [],
+    questions: [],
+    position: 0,
+    direction: 'zh-en',
+    submitted: false,
+    attempts: new Map(),
+    sessionId: '',
+    loaded: false,
+    loading: false
+  }
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -33,6 +44,7 @@ function showView(name) {
   $$('.rail-button[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   $$('.view').forEach((view) => view.classList.toggle('active', view.id === `view-${name}`));
   if (name === 'lookup') setTimeout(() => $('#word-input').focus(), 0);
+  if (name === 'dictation' && !state.quiz.loaded && !state.quiz.loading) loadQuizLibrary();
 }
 
 function setBusy(busy) {
@@ -165,8 +177,8 @@ async function addCurrentToNote(force = false) {
     toast(`“${response.word}” 已在笔记中，没有重复写入。`);
     return;
   }
-  const protectedMessage = response.checks?.originalUntouched && response.checks?.markersBalanced
-    ? `已加入 “${response.word}”；原文未改动，写后校验通过${response.backupPath ? '，备份已保存' : ''}。`
+  const protectedMessage = response.checks?.existingContentPreserved && response.checks?.masterTableUpdated && response.checks?.markersBalanced
+    ? `已加入 “${response.word}”；单词总表和折叠详解均已更新${response.backupPath ? '，原笔记已备份' : ''}。`
     : `已把 “${response.word}” 加入 IELTS words。`;
   toast(protectedMessage, 'success');
   if (button) button.textContent = '已加入 ✓';
@@ -259,9 +271,218 @@ async function inspectNote() {
   if (!response.ok) return toast(response.error.message, 'error');
   const note = response.note;
   $('#note-inspection').textContent = note.exists
-    ? `保护检查通过：${note.lineCount} 行，SHA-256 ${note.integrity.hash.slice(0, 12)}…，边界完整，已有 ${note.integrity.backupCount} 份写前备份。Wordloom 只会追加，不会改写这些原文。`
+    ? `保护检查通过：${note.lineCount} 行，SHA-256 ${note.integrity.hash.slice(0, 12)}…，边界完整，已有 ${note.integrity.backupCount} 份写前备份。新增时只更新受保护的单词总表并追加详解。`
     : '文件尚不存在；首次添加单词时会创建它。';
   toast(note.exists ? '已读取现有笔记。' : '将创建一篇新笔记。', 'success');
+}
+
+async function unifyNote() {
+  const notePath = $('#note-path').value.trim();
+  if (!notePath) return toast('请先选择笔记路径。', 'error');
+  const button = $('#unify-note');
+  button.disabled = true;
+  button.textContent = '整理中…';
+  const response = await window.wordloom.unifyNote(notePath);
+  button.disabled = false;
+  button.textContent = '整理为统一词表';
+  if (!response.ok) return toast(response.error.message, 'error');
+  state.quiz.loaded = false;
+  const message = response.status === 'unchanged'
+    ? `单词总表已经是最新状态，共 ${response.wordCount} 条。`
+    : `已整理 ${response.wordCount} 条词汇；后方详解保持不变，原笔记已备份。`;
+  $('#note-inspection').textContent = message;
+  toast(message, 'success');
+}
+
+function normalizedEnglish(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase('en-US')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?。！？]+$/u, '')
+    .trim();
+}
+
+function updateQuizRangeHint() {
+  const total = state.quiz.library.length;
+  if (!total) {
+    $('#quiz-range-hint').textContent = '请先读取词表。';
+    return;
+  }
+  const start = Math.max(1, Math.min(total, Number($('#quiz-range-start').value) || 1));
+  const end = Math.max(start, Math.min(total, Number($('#quiz-range-end').value) || total));
+  $('#quiz-range-hint').textContent = `将测试词表第 ${start}–${end} 条，共 ${end - start + 1} 题。`;
+}
+
+async function loadQuizLibrary() {
+  state.quiz.loading = true;
+  $('#quiz-library-status').textContent = '正在读取 Obsidian 单词总表…';
+  $('#quiz-start').disabled = true;
+  const response = await window.wordloom.loadQuiz();
+  state.quiz.loading = false;
+  if (!response.ok) {
+    state.quiz.loaded = false;
+    state.quiz.library = [];
+    $('#quiz-library-status').textContent = response.error.message;
+    $('#quiz-range-hint').textContent = '可前往设置页执行“整理为统一词表”。';
+    return;
+  }
+  state.quiz.library = response.entries;
+  state.quiz.loaded = true;
+  const total = response.entries.length;
+  $('#quiz-range-start').max = String(total);
+  $('#quiz-range-end').max = String(total);
+  $('#quiz-range-start').value = '1';
+  $('#quiz-range-end').value = String(total);
+  $('#quiz-library-status').textContent = `已读取 ${total} 条词汇；编号与 Obsidian 单词总表一致。`;
+  $('#quiz-start').disabled = false;
+  updateQuizRangeHint();
+}
+
+function shuffled(entries) {
+  const copy = [...entries];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[target]] = [copy[target], copy[index]];
+  }
+  return copy;
+}
+
+function currentQuizEntry() {
+  return state.quiz.questions[state.quiz.position];
+}
+
+function quizCounts() {
+  const values = [...state.quiz.attempts.values()];
+  return {
+    correct: values.filter((attempt) => attempt.status === 'correct').length,
+    wrong: values.filter((attempt) => attempt.status === 'wrong').length,
+    pending: values.filter((attempt) => attempt.status === 'pending').length,
+    unavailable: values.filter((attempt) => attempt.status === 'unavailable').length
+  };
+}
+
+function renderQuizCounters() {
+  const counts = quizCounts();
+  $('#quiz-correct').textContent = String(counts.correct);
+  $('#quiz-wrong').textContent = String(counts.wrong);
+  $('#quiz-pending').textContent = String(counts.pending);
+  if (!$('#quiz-finish').classList.contains('hidden')) {
+    $('#quiz-finish-summary').textContent = `正确 ${counts.correct} 题，错误 ${counts.wrong} 题${counts.pending ? `，${counts.pending} 题仍在后台判分` : ''}${counts.unavailable ? `，${counts.unavailable} 题因 AI 不可用未计分` : ''}。`;
+  }
+}
+
+function setQuizPill(status, text) {
+  const pill = $('#quiz-result-pill');
+  pill.className = `result-pill ${status}`;
+  pill.textContent = text;
+}
+
+function renderQuizQuestion() {
+  const entry = currentQuizEntry();
+  if (!entry) return finishQuiz();
+  state.quiz.submitted = false;
+  $('#quiz-card').classList.remove('hidden');
+  $('#quiz-finish').classList.add('hidden');
+  $('#quiz-progress-text').textContent = `${state.quiz.position + 1} / ${state.quiz.questions.length}`;
+  $('#quiz-progress-bar').style.width = `${((state.quiz.position + 1) / state.quiz.questions.length) * 100}%`;
+  $('#quiz-mode-label').textContent = state.quiz.direction === 'zh-en' ? '中译英 · 严格' : '英译中 · AI';
+  $('#quiz-source-index').textContent = `词表 #${entry.index}`;
+  $('#quiz-prompt-label').textContent = state.quiz.direction === 'zh-en' ? '根据中文写出英文' : '写出这个词的中文含义';
+  $('#quiz-prompt').textContent = state.quiz.direction === 'zh-en' ? entry.meaning : entry.word;
+  $('#quiz-answer').value = '';
+  $('#quiz-answer').disabled = false;
+  $('#quiz-submit').disabled = false;
+  $('#quiz-submit').textContent = '提交答案';
+  $('#quiz-reveal').classList.add('hidden');
+  $('#quiz-next-row').classList.add('hidden');
+  setQuizPill('neutral', '待作答');
+  setTimeout(() => $('#quiz-answer').focus(), 0);
+  renderQuizCounters();
+}
+
+function startQuiz() {
+  const total = state.quiz.library.length;
+  if (!total) return toast('单词总表还没有可用词条。', 'error');
+  const start = Math.max(1, Math.min(total, Number($('#quiz-range-start').value) || 1));
+  const end = Math.max(start, Math.min(total, Number($('#quiz-range-end').value) || total));
+  let questions = state.quiz.library.filter((entry) => entry.index >= start && entry.index <= end);
+  if ($('#quiz-order').value === 'random') questions = shuffled(questions);
+  state.quiz.questions = questions;
+  state.quiz.position = 0;
+  state.quiz.direction = $('#quiz-direction').value;
+  state.quiz.attempts = new Map();
+  state.quiz.sessionId = crypto.randomUUID();
+  $('#quiz-setup').classList.add('hidden');
+  $('#quiz-session').classList.remove('hidden');
+  renderQuizQuestion();
+}
+
+function showQuizAnswer(entry, feedback) {
+  $('#quiz-standard-answer').textContent = state.quiz.direction === 'zh-en' ? entry.word : entry.meaning;
+  $('#quiz-feedback').textContent = feedback;
+  $('#quiz-reveal').classList.remove('hidden');
+  $('#quiz-next-row').classList.remove('hidden');
+  $('#quiz-answer').disabled = true;
+  $('#quiz-submit').disabled = true;
+}
+
+async function resolveChineseJudgement(entry, answer, sessionId) {
+  const response = await window.wordloom.judgeChinese(entry.id, answer);
+  if (state.quiz.sessionId !== sessionId) return;
+  const attempt = state.quiz.attempts.get(entry.id);
+  if (!attempt || attempt.status !== 'pending') return;
+  attempt.status = response.ok ? (response.correct ? 'correct' : 'wrong') : 'unavailable';
+  attempt.feedback = response.ok ? response.feedback : response.error.message;
+  renderQuizCounters();
+  if (currentQuizEntry()?.id === entry.id && state.quiz.submitted) {
+    setQuizPill(response.ok ? (response.correct ? 'correct' : 'wrong') : 'neutral', response.ok ? (response.correct ? '正确' : '错误') : '未计分');
+    $('#quiz-feedback').textContent = attempt.feedback;
+  }
+}
+
+function submitQuizAnswer() {
+  if (state.quiz.submitted) return nextQuizQuestion();
+  const entry = currentQuizEntry();
+  const answer = $('#quiz-answer').value.trim();
+  if (!answer) return toast('先写下你的答案。', 'error');
+  state.quiz.submitted = true;
+  if (state.quiz.direction === 'zh-en') {
+    const correct = (entry.answers || []).includes(normalizedEnglish(answer));
+    state.quiz.attempts.set(entry.id, { status: correct ? 'correct' : 'wrong', answer });
+    setQuizPill(correct ? 'correct' : 'wrong', correct ? '正确' : '错误');
+    showQuizAnswer(entry, correct ? '严格匹配通过。' : '答案未与词表中的英文严格匹配。');
+  } else {
+    state.quiz.attempts.set(entry.id, { status: 'pending', answer });
+    setQuizPill('pending', 'AI 判分中');
+    showQuizAnswer(entry, '标准答案已显示；AI 正在后台判断，你现在就可以进入下一题。');
+    resolveChineseJudgement(entry, answer, state.quiz.sessionId);
+  }
+  renderQuizCounters();
+  setTimeout(() => $('#quiz-next').focus(), 0);
+}
+
+function nextQuizQuestion() {
+  if (!state.quiz.submitted) return;
+  state.quiz.position += 1;
+  renderQuizQuestion();
+}
+
+function finishQuiz() {
+  $('#quiz-card').classList.add('hidden');
+  $('#quiz-finish').classList.remove('hidden');
+  $('#quiz-progress-text').textContent = `${state.quiz.questions.length} / ${state.quiz.questions.length}`;
+  $('#quiz-progress-bar').style.width = '100%';
+  renderQuizCounters();
+}
+
+function exitQuiz() {
+  state.quiz.sessionId = '';
+  $('#quiz-session').classList.add('hidden');
+  $('#quiz-setup').classList.remove('hidden');
+  updateQuizRangeHint();
 }
 
 function wireEvents() {
@@ -272,6 +493,15 @@ function wireEvents() {
   $('#test-api').addEventListener('click', testApi);
   $('#choose-note').addEventListener('click', chooseNote);
   $('#inspect-note').addEventListener('click', inspectNote);
+  $('#unify-note').addEventListener('click', unifyNote);
+  $('#quiz-reload').addEventListener('click', loadQuizLibrary);
+  $('#quiz-start').addEventListener('click', startQuiz);
+  $('#quiz-exit').addEventListener('click', exitQuiz);
+  $('#quiz-again').addEventListener('click', exitQuiz);
+  $('#quiz-next').addEventListener('click', nextQuizQuestion);
+  $('#quiz-answer-form').addEventListener('submit', (event) => { event.preventDefault(); submitQuizAnswer(); });
+  $('#quiz-range-start').addEventListener('input', updateQuizRangeHint);
+  $('#quiz-range-end').addEventListener('input', updateQuizRangeHint);
   $('#clear-key').addEventListener('click', async () => {
     const response = await window.wordloom.clearApiKey();
     if (!response.ok) return toast(response.error.message, 'error');

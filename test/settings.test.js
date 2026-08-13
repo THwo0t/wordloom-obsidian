@@ -46,3 +46,30 @@ test('migrates the old long shortcuts without changing unrelated settings', asyn
   assert.equal(settings.notePath, '');
   assert.equal(settings.endpoint, 'https://example.test');
 });
+
+test('fills a missing encrypted key from the legacy app directory without overwriting current settings', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wordloom-userdata-migration-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const current = path.join(root, 'Wordloom');
+  const legacy = path.join(root, 'wordloom-obsidian');
+  await fs.mkdir(current);
+  await fs.mkdir(legacy);
+  await fs.writeFile(path.join(current, 'settings.json'), JSON.stringify({ endpoint: 'https://current.test', notePath: '/current.md' }));
+  await fs.writeFile(path.join(legacy, 'settings.json'), JSON.stringify({
+    endpoint: 'https://legacy.test',
+    notePath: '/legacy.md',
+    apiKeyEncrypted: Buffer.from('legacy-secret').toString('base64')
+  }));
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'secret_service',
+    decryptString: (buffer) => buffer.toString('utf8'),
+    encryptString: (value) => Buffer.from(value)
+  };
+  const store = new SettingsStore(current, safeStorage, { legacyUserDataPaths: [legacy] });
+  const settings = await store.load();
+  assert.equal(settings.hasApiKey, true);
+  assert.equal(settings.endpoint, 'https://current.test');
+  assert.equal(settings.notePath, '/current.md');
+  assert.equal(store.getApiKey(), 'legacy-secret');
+});

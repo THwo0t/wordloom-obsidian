@@ -1,6 +1,6 @@
 # Wordloom
 
-Wordloom 是一款面向 Obsidian 的本地 IELTS 生词采集器。输入单词后，DeepSeek 原生 Web Search 会限定搜索 Cambridge Dictionary，提取词性、音标、释义、例句与 CEFR 等级，并在同一次请求中整理学习提示，最后安全追加到指定的 Markdown 笔记。
+Wordloom 是一款面向 Obsidian 的本地 IELTS 生词采集器。输入单词后，DeepSeek 原生 Web Search 会限定搜索 Cambridge Dictionary，提取词性、音标、释义、例句与 CEFR 等级，并在同一次请求中整理学习提示，最后安全同步到指定 Markdown 笔记的单词总表与折叠详解区。
 
 ## 特性
 
@@ -8,6 +8,9 @@ Wordloom 是一款面向 Obsidian 的本地 IELTS 生词采集器。输入单词
 - 可选 Cambridge Dictionary 官方 API；配置 Access Key 后优先使用授权 XML 接口
 - HTML 主界面与轻量悬浮窗，支持 `Alt+V` 和 `Alt+Enter`
 - Obsidian 原生折叠 Callout：平时每个词只占一行，点击后查看完整词卡
+- 单一编号词表：Wordloom 新词同步写入总表，同时保留后方完整折叠详解
+- 内置默写：中译英严格匹配，英译中立即亮出答案并由 AI 后台判分
+- 支持按顺序、随机以及指定词表编号范围出题，状态栏实时显示正确、错误与判分中数量
 - 重复词检测、写前完整备份、并发修改检测、原子替换及写后 SHA-256 校验
 - API Key 由 Electron `safeStorage` 保存，不会暴露给页面脚本或写入仓库
 - 独立悬浮窗关闭后立即退出，不常驻后台
@@ -58,6 +61,7 @@ wl mitigate
 2. 填写 DeepSeek API Key；默认 Endpoint 为 `https://api.deepseek.com`，模型为 `deepseek-v4-flash`。
 3. 测试连接并保存。
 4. 可选：填写 Cambridge Dictionary API Access Key。
+5. 如果原笔记含多个分类表，可在设置中点击“整理为统一词表”；Wordloom 会先完整备份再迁移。
 
 默认查询路径如下：
 
@@ -72,7 +76,15 @@ wl mitigate
 
 ## 笔记格式与保护
 
-新增词条位于笔记末尾的 `Wordloom 新增词汇` 区域。默认使用 Obsidian 折叠 Callout：
+笔记前部使用一个受边界标记保护的 `单词总表`，它也是默写题库和范围编号的唯一来源：
+
+```markdown
+| # | Word / Phrase | Meaning |
+| ---: | --- | --- |
+| 1 | mitigate | 减轻；缓和 |
+```
+
+每次新增会同步更新这张表，并在笔记末尾的 `Wordloom 新增词汇` 区域保留完整 Obsidian 折叠 Callout：
 
 ```markdown
 > [!abstract]- **mitigate** `verb` — 使缓和；减轻（危害等）
@@ -84,8 +96,8 @@ wl mitigate
 1. 验证 UTF-8、frontmatter 与 Wordloom 区块边界。
 2. 检查 Obsidian 是否在写入期间修改了文件。
 3. 在笔记旁的 `.wordloom-backups/` 中保存完整写前备份。
-4. 验证原笔记前缀逐字节不变，再执行原子替换。
-5. 重新读取文件，核对长度、哈希和区块边界，并写入审计回执。
+4. 验证单词总表之外的原文与已有详解逐字节不变，再执行原子替换。
+5. 重新读取文件，核对总表词条、哈希和区块边界，并写入审计回执。
 
 模型不会接收整篇笔记，也没有直接文件写入权限。
 
@@ -112,7 +124,8 @@ npm run dist:linux
 src/main.js                 Electron 生命周期、快捷键与 IPC
 src/services/cambridge.js   Cambridge 官方 API 与 HTML 解析
 src/services/deepseek.js    DeepSeek 原生搜索、结构校验与学习信息
-src/services/obsidian.js    折叠模板、备份、去重与原子写入
+src/services/obsidian.js    折叠模板、备份、双写保护与原子写入
+src/services/vocabulary.js  统一词表解析、迁移与严格判分
 src/renderer/               主界面与悬浮窗
 test/                       服务与笔记保护测试
 ```

@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { appendToNote, backupDirectoryFor, collapseWordloomBlocks, collapseWordloomEntries, containsWord, renderTemplate } = require('../src/services/obsidian');
+const { appendToNote, backupDirectoryFor, collapseWordloomBlocks, collapseWordloomEntries, containsWord, renderTemplate, unifyVocabularyNote } = require('../src/services/obsidian');
+const { buildUnifiedVocabularyDocument, isStrictEnglishAnswer, parseMasterTable } = require('../src/services/vocabulary');
 
 const result = {
   query: 'mitigate',
@@ -77,6 +78,8 @@ test('creates a note and prevents duplicate entries', async (context) => {
   assert.equal(second.status, 'duplicate');
   const note = await fs.readFile(notePath, 'utf8');
   assert.equal((note.match(/<!-- wordloom:mitigate -->/g) || []).length, 1);
+  assert.match(note, /## 单词总表/);
+  assert.match(note, /\| 1 \| mitigate \| 减轻，缓和 \|/);
 });
 
 test('recognizes words already present in tables and review lists', () => {
@@ -87,7 +90,7 @@ test('recognizes words already present in tables and review lists', () => {
   assert.equal(containsWord(original, 'mitigate'), false);
 });
 
-test('backs up an existing note and proves its original bytes are unchanged', async (context) => {
+test('backs up an existing note and preserves existing content while double-writing the word', async (context) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'wordloom-protection-'));
   context.after(() => fs.rm(directory, { recursive: true, force: true }));
   const notePath = path.join(directory, 'IELTS Words.md');
@@ -100,13 +103,56 @@ test('backs up an existing note and proves its original bytes are unchanged', as
 
   assert.equal(response.status, 'added');
   assert.equal(response.checks.backupCreated, true);
-  assert.equal(response.checks.originalUntouched, true);
+  assert.equal(response.checks.existingContentPreserved, true);
+  assert.equal(response.checks.masterTableUpdated, true);
+  assert.equal(response.checks.detailedBlockAppended, true);
   assert.equal(response.checks.markersBalanced, true);
   assert.equal(written.subarray(0, original.length).equals(original), true);
   assert.equal(backup.equals(original), true);
   assert.match(written.toString('utf8'), /## Wordloom 新增词汇/);
   assert.equal(path.dirname(response.backupPath), backupDirectoryFor(notePath));
   assert.ok(response.receiptPath);
+});
+
+test('builds one deduplicated master table and preserves detailed blocks byte-for-byte', () => {
+  const details = `## Wordloom 新增词汇\n\n<!-- wordloom:mitigate -->\n> [!abstract]- **mitigate** \`C2\` \`verb\` — 减轻；缓和\n> full explanation\n<!-- /wordloom:mitigate -->\n`;
+  const original = `---\ntags: [IELTS]\n---\n\n# IELTS Words\n\n### 分类一\n\n| Word | Meaning |\n| --- | --- |\n| mould / mold (n./v.) | 模具；塑造 |\n| publicity | 宣传 |\n\n### 复习\n\n- [ ] publicity — 宣传；曝光\n- [ ] statistical — 统计的\n\n${details}`;
+  const unified = buildUnifiedVocabularyDocument(original);
+  assert.equal(unified.text.endsWith(details), true);
+  assert.deepEqual(parseMasterTable(unified.text).map((entry) => entry.word), ['mould / mold', 'publicity', 'statistical', 'mitigate']);
+  assert.doesNotMatch(unified.text.slice(0, unified.text.indexOf(details)), /### 分类一|### 复习/);
+});
+
+test('merges different meanings of the same headword without duplicating contained text', () => {
+  const original = `# IELTS Words\n\n| Word | Meaning |\n| --- | --- |\n| spell (n.) | 一段时间；一阵 |\n| spell (v.) | 拼写 |\n| publicity | 宣传 |\n- [ ] publicity — 宣传；曝光\n`;
+  const entries = buildUnifiedVocabularyDocument(original).entries;
+  assert.deepEqual(entries, [
+    { word: 'spell', meaning: '一段时间；一阵；拼写' },
+    { word: 'publicity', meaning: '宣传；曝光' }
+  ]);
+});
+
+test('migrates a real note transactionally with a complete backup', async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'wordloom-unify-'));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const notePath = path.join(directory, 'IELTS Words.md');
+  const details = `## Wordloom 新增词汇\n\n<!-- wordloom:mitigate -->\n> [!abstract]- **mitigate** \`verb\` — 减轻\n> detail\n<!-- /wordloom:mitigate -->\n`;
+  const original = `# IELTS Words\n\n### 分类\n\n| Word | Meaning |\n| --- | --- |\n| publicity | 宣传 |\n\n${details}`;
+  await fs.writeFile(notePath, original);
+  const response = await unifyVocabularyNote(notePath);
+  const written = await fs.readFile(notePath, 'utf8');
+  assert.equal(response.status, 'unified');
+  assert.equal(response.wordCount, 2);
+  assert.equal(written.endsWith(details), true);
+  assert.equal(await fs.readFile(response.backupPath, 'utf8'), original);
+  assert.ok(response.receiptPath);
+});
+
+test('strict Chinese-to-English matching accepts listed spellings only', () => {
+  assert.equal(isStrictEnglishAnswer('mould', 'mould / mold (n./v.)'), true);
+  assert.equal(isStrictEnglishAnswer('MOLD.', 'mould / mold (n./v.)'), true);
+  assert.equal(isStrictEnglishAnswer('molds', 'mould / mold (n./v.)'), false);
+  assert.equal(isStrictEnglishAnswer('mitigate the risk', 'mitigate'), false);
 });
 
 test('rejects unsafe templates before touching an existing note', async (context) => {

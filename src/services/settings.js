@@ -30,8 +30,11 @@ const EDITABLE_KEYS = new Set([
 ]);
 
 class SettingsStore {
-  constructor(userDataPath, safeStorage) {
+  constructor(userDataPath, safeStorage, { legacyUserDataPaths = [] } = {}) {
     this.filePath = path.join(userDataPath, 'settings.json');
+    this.legacyFilePaths = legacyUserDataPaths
+      .map((value) => path.join(value, 'settings.json'))
+      .filter((value) => value !== this.filePath);
     this.safeStorage = safeStorage;
     this.data = { ...DEFAULT_SETTINGS };
     this.volatileApiKey = '';
@@ -39,26 +42,64 @@ class SettingsStore {
   }
 
   async load() {
+    let currentExists = true;
     try {
       const saved = JSON.parse(await fs.readFile(this.filePath, 'utf8'));
       this.data = { ...DEFAULT_SETTINGS, ...saved };
-      let migrated = false;
-      for (const key of ['quickShortcut', 'addShortcut']) {
-        if (this.data[key] === LEGACY_SHORTCUTS[key]) {
-          this.data[key] = DEFAULT_SETTINGS[key];
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('Could not load settings:', error.message);
+      currentExists = false;
+      this.data = { ...DEFAULT_SETTINGS };
+    }
+
+    let migrated = false;
+    for (const legacyFilePath of this.legacyFilePaths) {
+      let legacy;
+      try {
+        legacy = JSON.parse(await fs.readFile(legacyFilePath, 'utf8'));
+      } catch (error) {
+        if (error.code !== 'ENOENT') console.warn('Could not load legacy settings:', error.message);
+        continue;
+      }
+      if (!currentExists) {
+        this.data = { ...DEFAULT_SETTINGS, ...legacy };
+        currentExists = true;
+        migrated = true;
+      } else {
+        for (const secret of ['apiKeyEncrypted', 'cambridgeKeyEncrypted']) {
+          if (!this.canDecryptSecret(this.data[secret]) && this.canDecryptSecret(legacy[secret])) {
+            this.data[secret] = legacy[secret];
+            migrated = true;
+          }
+        }
+        if (!this.data.notePath && legacy.notePath) {
+          this.data.notePath = legacy.notePath;
           migrated = true;
         }
       }
-      if (String(this.data.template || '').trim() === LEGACY_EXPANDED_TEMPLATE.trim()) {
-        this.data.template = DEFAULT_TEMPLATE;
+      break;
+    }
+    for (const key of ['quickShortcut', 'addShortcut']) {
+      if (this.data[key] === LEGACY_SHORTCUTS[key]) {
+        this.data[key] = DEFAULT_SETTINGS[key];
         migrated = true;
       }
-      if (migrated) await this.persist();
-    } catch (error) {
-      if (error.code !== 'ENOENT') console.warn('Could not load settings:', error.message);
-      this.data = { ...DEFAULT_SETTINGS };
     }
+    if (String(this.data.template || '').trim() === LEGACY_EXPANDED_TEMPLATE.trim()) {
+      this.data.template = DEFAULT_TEMPLATE;
+      migrated = true;
+    }
+    if (migrated) await this.persist();
     return this.publicSettings();
+  }
+
+  canDecryptSecret(value) {
+    if (!value || !this.encryptionAvailable()) return false;
+    try {
+      return Boolean(this.safeStorage.decryptString(Buffer.from(value, 'base64')));
+    } catch {
+      return false;
+    }
   }
 
   encryptionAvailable() {

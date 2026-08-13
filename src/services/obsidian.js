@@ -3,8 +3,20 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const {
+  DETAILS_HEADING,
+  MASTER_TABLE_END,
+  MASTER_TABLE_START,
+  briefMeaningFromResult,
+  buildUnifiedVocabularyDocument,
+  masterTableRange,
+  parseMasterTable,
+  publicQuizEntries,
+  updateMasterTable,
+  vocabularyKey
+} = require('./vocabulary');
 
-const PROTECTED_SECTION_HEADING = '## Wordloom 新增词汇';
+const PROTECTED_SECTION_HEADING = DETAILS_HEADING;
 const MAX_NOTE_BYTES = 20 * 1024 * 1024;
 const MAX_BLOCK_BYTES = 64 * 1024;
 
@@ -237,6 +249,14 @@ function validateExistingNote(buffer, resolved) {
   if (opens !== closes) {
     throw new NoteProtectionError('已有 Wordloom 区块边界不完整，已停止写入，请先检查笔记。', 'UNBALANCED_MARKERS', { opens, closes });
   }
+  const masterStarts = countMatches(text, new RegExp(MASTER_TABLE_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'));
+  const masterEnds = countMatches(text, new RegExp(MASTER_TABLE_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'));
+  if (masterStarts !== masterEnds || masterStarts > 1) {
+    throw new NoteProtectionError('单词总表保护边界不完整或重复，已停止写入。', 'UNBALANCED_MASTER_TABLE', {
+      starts: masterStarts,
+      ends: masterEnds
+    });
+  }
 
   return {
     path: resolved,
@@ -309,16 +329,36 @@ function buildAppendage(currentText, block) {
   return `${separator}${needsHeading ? `${PROTECTED_SECTION_HEADING}\n\n` : ''}${block}\n`;
 }
 
-function validateTransition(currentBuffer, nextBuffer, appendage, blockInfo) {
-  if (nextBuffer.byteLength !== currentBuffer.byteLength + Buffer.byteLength(appendage, 'utf8')) {
-    throw new NoteProtectionError('写入长度校验失败，已停止替换原笔记。', 'LENGTH_CHECK_FAILED');
+function validateTransition(currentText, nextText, tableUpdate, appendage, blockInfo, result) {
+  const expected = `${tableUpdate.text}${appendage}`;
+  if (nextText !== expected) {
+    throw new NoteProtectionError('双写内容与预期不一致，已停止替换原笔记。', 'TRANSITION_MISMATCH');
   }
-  if (!nextBuffer.subarray(0, currentBuffer.byteLength).equals(currentBuffer)) {
-    throw new NoteProtectionError('原笔记内容发生变化，已停止写入。', 'PREFIX_CHECK_FAILED');
+  if (!nextText.endsWith(appendage) || !appendage.includes(`<!-- wordloom:${blockInfo.id} -->`)) {
+    throw new NoteProtectionError('新增详解区块校验失败，已停止写入。', 'APPEND_CHECK_FAILED');
   }
-  const appended = nextBuffer.subarray(currentBuffer.byteLength).toString('utf8');
-  if (appended !== appendage || !appended.includes(`<!-- wordloom:${blockInfo.id} -->`)) {
-    throw new NoteProtectionError('新增区块校验失败，已停止写入。', 'APPEND_CHECK_FAILED');
+
+  const beforeRange = masterTableRange(currentText);
+  const afterRange = masterTableRange(tableUpdate.text);
+  if (!afterRange) throw new NoteProtectionError('单词总表边界缺失，已停止写入。', 'MASTER_TABLE_MISSING');
+  if (beforeRange) {
+    const beforeOutside = `${currentText.slice(0, beforeRange.start)}${currentText.slice(beforeRange.end)}`;
+    const afterOutside = `${tableUpdate.text.slice(0, afterRange.start)}${tableUpdate.text.slice(afterRange.end)}`;
+    if (beforeOutside !== afterOutside) {
+      throw new NoteProtectionError('单词总表之外的原文发生变化，已停止写入。', 'OUTSIDE_TABLE_CHANGED');
+    }
+  } else if (!tableUpdate.text.startsWith(tableUpdate.before) || !tableUpdate.text.endsWith(tableUpdate.after)) {
+    throw new NoteProtectionError('创建单词总表时未完整保留原文，已停止写入。', 'ORIGINAL_CONTENT_CHANGED');
+  }
+
+  const key = vocabularyKey(result.query);
+  if (!parseMasterTable(tableUpdate.text).some((entry) => vocabularyKey(entry.word) === key)) {
+    throw new NoteProtectionError('新增词没有写入单词总表，已停止写入。', 'TABLE_ENTRY_MISSING');
+  }
+  for (const block of currentText.match(WORDLOOM_BLOCK_PATTERN) || []) {
+    if (!tableUpdate.text.includes(block)) {
+      throw new NoteProtectionError('已有 Wordloom 详解发生变化，已停止写入。', 'EXISTING_BLOCK_CHANGED');
+    }
   }
   return true;
 }
@@ -450,15 +490,23 @@ function appendToNote(notePath, result, { template = DEFAULT_TEMPLATE, force = f
     const before = validateExistingNote(currentBuffer, resolved);
     const current = currentBuffer.toString('utf8');
 
-    if (!force && containsWord(current, result.query)) {
-      return { status: 'duplicate', path: resolved, word: result.query, checks: { originalHash: before.hash, originalUntouched: true } };
+    const detailedMarker = `<!-- wordloom:${markerId(result.query)} -->`;
+    if (current.toLocaleLowerCase('en-US').includes(detailedMarker)) {
+      return {
+        status: 'duplicate',
+        path: resolved,
+        word: result.query,
+        checks: { originalHash: before.hash, existingContentPreserved: true, markersBalanced: true }
+      };
     }
 
     const block = renderTemplate(result, template);
     const blockInfo = validateRenderedBlock(block, result);
-    const appendage = buildAppendage(current, block);
-    const nextBuffer = Buffer.concat([currentBuffer, Buffer.from(appendage, 'utf8')]);
-    validateTransition(currentBuffer, nextBuffer, appendage, blockInfo);
+    const tableUpdate = updateMasterTable(current, { word: result.query, meaning: briefMeaningFromResult(result) });
+    const appendage = buildAppendage(tableUpdate.text, block);
+    const nextText = `${tableUpdate.text}${appendage}`;
+    const nextBuffer = Buffer.from(nextText, 'utf8');
+    validateTransition(current, nextText, tableUpdate, appendage, blockInfo, result);
     validateExistingNote(nextBuffer, resolved);
 
     if (existed) {
@@ -478,18 +526,20 @@ function appendToNote(notePath, result, { template = DEFAULT_TEMPLATE, force = f
     if (!writtenBuffer.equals(nextBuffer)) {
       throw new NoteProtectionError('写后内容与预期不一致；原始备份已保留，请停止继续写入。', 'POST_WRITE_MISMATCH', { backupPath });
     }
-    validateTransition(currentBuffer, writtenBuffer, appendage, blockInfo);
+    validateTransition(current, writtenBuffer.toString('utf8'), tableUpdate, appendage, blockInfo, result);
 
     const checks = {
       backupCreated: Boolean(backupPath),
-      originalUntouched: writtenBuffer.subarray(0, currentBuffer.byteLength).equals(currentBuffer),
+      existingContentPreserved: true,
+      masterTableUpdated: true,
+      detailedBlockAppended: true,
       originalHash: before.hash,
       resultHash: after.hash,
       blockHash: blockInfo.hash,
       markersBalanced: after.markersBalanced,
       bytesAdded: writtenBuffer.byteLength - currentBuffer.byteLength
     };
-    if (!checks.originalUntouched || !checks.markersBalanced) {
+    if (!checks.existingContentPreserved || !checks.markersBalanced) {
       if (writtenBuffer.equals(nextBuffer)) await atomicReplace(resolved, currentBuffer, noteStat.mode);
       throw new NoteProtectionError('写后保护检查失败，已自动恢复原笔记。', 'POST_WRITE_CHECK_FAILED', { backupPath });
     }
@@ -514,6 +564,97 @@ function appendToNote(notePath, result, { template = DEFAULT_TEMPLATE, force = f
   return queued;
 }
 
+function unifyVocabularyNote(notePath, { sourceText = '' } = {}) {
+  const operation = async () => {
+    const resolved = validateNotePath(notePath);
+    const [currentBuffer, noteStat] = await Promise.all([fs.readFile(resolved), fs.stat(resolved)]);
+    const before = validateExistingNote(currentBuffer, resolved);
+    const current = currentBuffer.toString('utf8');
+    const migrationSource = sourceText ? String(sourceText) : current;
+    const unified = buildUnifiedVocabularyDocument(migrationSource);
+    if (sourceText) {
+      const currentDetailsIndex = current.indexOf(PROTECTED_SECTION_HEADING);
+      const currentDetails = currentDetailsIndex === -1 ? '' : current.slice(currentDetailsIndex);
+      if (currentDetails !== unified.details) {
+        throw new NoteProtectionError('重建来源与当前笔记的 Wordloom 详解不同，已停止写入。', 'SOURCE_DETAILS_MISMATCH');
+      }
+    }
+    if (unified.text === current) {
+      return {
+        status: 'unchanged',
+        path: resolved,
+        wordCount: unified.entries.length,
+        checks: { originalHash: before.hash, markersBalanced: true }
+      };
+    }
+    if (!unified.entries.length) {
+      throw new NoteProtectionError('没有从现有笔记提取到词条，已停止迁移。', 'NO_VOCABULARY_FOUND');
+    }
+    if (unified.details && !unified.text.endsWith(unified.details)) {
+      throw new NoteProtectionError('迁移结果没有完整保留 Wordloom 详解，已停止写入。', 'DETAILS_SCOPE_CHECK_FAILED');
+    }
+    const nextBuffer = Buffer.from(unified.text, 'utf8');
+    const next = validateExistingNote(nextBuffer, resolved);
+    const parsed = publicQuizEntries(unified.text);
+    if (parsed.length !== unified.entries.length) {
+      throw new NoteProtectionError('迁移后的单词总表计数不一致，已停止写入。', 'TABLE_COUNT_MISMATCH', {
+        expected: unified.entries.length,
+        actual: parsed.length
+      });
+    }
+
+    const latestBuffer = await fs.readFile(resolved);
+    if (!latestBuffer.equals(currentBuffer)) {
+      throw new NoteProtectionError('Obsidian 在迁移前修改了笔记。本次操作已取消，请重试。', 'CONCURRENT_EDIT');
+    }
+    const backupPath = await createBackup(resolved, currentBuffer, noteStat.mode, before.hash);
+    await atomicReplace(resolved, nextBuffer, noteStat.mode);
+    const writtenBuffer = await fs.readFile(resolved);
+    if (!writtenBuffer.equals(nextBuffer)) {
+      await atomicReplace(resolved, currentBuffer, noteStat.mode);
+      throw new NoteProtectionError('迁移写后内容不一致，已自动恢复原笔记。', 'POST_WRITE_MISMATCH', { backupPath });
+    }
+    const after = validateExistingNote(writtenBuffer, resolved);
+    const written = writtenBuffer.toString('utf8');
+    if ((unified.details && !written.endsWith(unified.details)) || publicQuizEntries(written).length !== unified.entries.length) {
+      await atomicReplace(resolved, currentBuffer, noteStat.mode);
+      throw new NoteProtectionError('迁移写后检查失败，已自动恢复原笔记。', 'POST_WRITE_CHECK_FAILED', { backupPath });
+    }
+
+    const checks = {
+      backupCreated: true,
+      detailsByteExact: Boolean(unified.details),
+      masterTableCreated: true,
+      wordCount: unified.entries.length,
+      originalHash: before.hash,
+      resultHash: after.hash,
+      markersBalanced: after.markersBalanced
+    };
+    const receiptPath = await writeReceipt(backupPath, {
+      version: 1,
+      operation: 'unify-vocabulary-table',
+      writtenAt: new Date().toISOString(),
+      notePath: resolved,
+      backupPath,
+      checks
+    }).catch(() => '');
+    return { status: 'unified', path: resolved, wordCount: unified.entries.length, backupPath, receiptPath, checks };
+  };
+
+  const queued = writeQueue.then(operation, operation);
+  writeQueue = queued.catch(() => {});
+  return queued;
+}
+
+async function readVocabularyEntries(notePath) {
+  const resolved = validateNotePath(notePath);
+  const buffer = await fs.readFile(resolved);
+  validateExistingNote(buffer, resolved);
+  const entries = publicQuizEntries(buffer.toString('utf8'));
+  if (!entries.length) throw new Error('单词总表为空；请先执行统一词表迁移。');
+  return entries;
+}
+
 async function readNoteSummary(notePath) {
   const resolved = validateNotePath(notePath);
   try {
@@ -534,7 +675,7 @@ async function readNoteSummary(notePath) {
       exists: true,
       path: resolved,
       lineCount: lines.length,
-      wordCount: (content.match(/<!-- wordloom:/g) || []).length,
+      wordCount: publicQuizEntries(content).length || (content.match(/<!-- wordloom:/g) || []).length,
       tail: lines.slice(-80).join('\n').slice(-10_000),
       integrity: {
         ok: true,
@@ -563,10 +704,12 @@ module.exports = {
   containsWord,
   markerId,
   readNoteSummary,
+  readVocabularyEntries,
   renderTemplate,
   sha256,
   templateValues,
   validateExistingNote,
   validateRenderedBlock,
-  validateNotePath
+  validateNotePath,
+  unifyVocabularyNote
 };

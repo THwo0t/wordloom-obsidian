@@ -15,11 +15,12 @@ const {
 const {
   fetchCambridgeApi,
 } = require('./services/cambridge');
-const { enrichWithAi, fetchCambridgeViaWebSearch, testAiConnection } = require('./services/deepseek');
-const { appendToNote, readNoteSummary, renderTemplate } = require('./services/obsidian');
+const { enrichWithAi, fetchCambridgeViaWebSearch, judgeChineseAnswer, testAiConnection } = require('./services/deepseek');
+const { appendToNote, readNoteSummary, readVocabularyEntries, renderTemplate, unifyVocabularyNote } = require('./services/obsidian');
 const { SettingsStore } = require('./services/settings');
 
 const isQuickLaunch = process.argv.includes('--quick');
+const isAutomatedTest = process.env.WORDLOOM_E2E === '1';
 
 function wordFromArgv(argv) {
   const index = argv.indexOf('--word');
@@ -39,6 +40,7 @@ let settingsStore = null;
 let shortcutRegistration = { quick: false, add: false };
 const lookupControllers = new Map();
 const resultCache = new Map();
+const quizEntryCache = new Map();
 
 function userError(error) {
   if (error?.name === 'AbortError') return { message: '查询已取消。', code: 'CANCELLED' };
@@ -78,7 +80,9 @@ function createMainWindow() {
   });
   secureWindow(mainWindow);
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => {
+    if (!isAutomatedTest) mainWindow?.show();
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
     if (!quickWindow) app.quit();
@@ -117,7 +121,9 @@ function createQuickWindow(word = '') {
   });
   secureWindow(quickWindow);
   quickWindow.loadFile(path.join(__dirname, 'renderer', 'quick.html'));
-  quickWindow.once('ready-to-show', () => quickWindow?.show());
+  quickWindow.once('ready-to-show', () => {
+    if (!isAutomatedTest) quickWindow?.show();
+  });
   quickWindow.on('closed', () => {
     quickWindow = null;
     // A process launched with --quick has no reason to remain after its only window closes.
@@ -289,6 +295,43 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle('note:unify', async (_event, notePath) => {
+    try {
+      const settings = settingsStore.publicSettings();
+      return { ok: true, ...(await unifyVocabularyNote(notePath || settings.notePath)) };
+    } catch (error) {
+      return { ok: false, error: userError(error) };
+    }
+  });
+
+  ipcMain.handle('quiz:load', async () => {
+    try {
+      const settings = settingsStore.publicSettings();
+      const entries = await readVocabularyEntries(settings.notePath);
+      quizEntryCache.clear();
+      const publicEntries = entries.map((entry) => {
+        const id = crypto.randomUUID();
+        quizEntryCache.set(id, entry);
+        return { ...entry, id };
+      });
+      return { ok: true, entries: publicEntries };
+    } catch (error) {
+      return { ok: false, error: userError(error) };
+    }
+  });
+
+  ipcMain.handle('quiz:judge-chinese', async (_event, payload = {}) => {
+    try {
+      const entry = quizEntryCache.get(String(payload.entryId || ''));
+      if (!entry) throw new Error('这道题已过期，请重新开始默写。');
+      const settings = settingsStore.publicSettings();
+      const result = await judgeChineseAnswer(entry, payload.answer, settings, settingsStore.getApiKey());
+      return { ok: true, ...result };
+    } catch (error) {
+      return { ok: false, error: userError(error) };
+    }
+  });
+
   ipcMain.handle('api:test', async (_event, patch = {}) => {
     try {
       const settings = { ...settingsStore.publicSettings(), ...patch };
@@ -337,7 +380,9 @@ if (gotInstanceLock) {
   });
 
   app.whenReady().then(async () => {
-    settingsStore = new SettingsStore(app.getPath('userData'), safeStorage);
+    settingsStore = new SettingsStore(app.getPath('userData'), safeStorage, {
+      legacyUserDataPaths: [path.join(app.getPath('appData'), 'wordloom-obsidian')]
+    });
     await settingsStore.load();
     registerIpc();
     registerShortcuts(settingsStore.publicSettings());
