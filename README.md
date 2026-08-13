@@ -23,14 +23,14 @@ Wordloom 是一款面向 Obsidian 的本地 IELTS 生词采集器。输入单词
 AppImage：
 
 ```bash
-chmod +x Wordloom-0.1.0-x86_64.AppImage
-./Wordloom-0.1.0-x86_64.AppImage
+chmod +x Wordloom-0.2.0-x86_64.AppImage
+./Wordloom-0.2.0-x86_64.AppImage
 ```
 
 Debian / Ubuntu：
 
 ```bash
-sudo apt install ./Wordloom-0.1.0-amd64.deb
+sudo apt install ./Wordloom-0.2.0-amd64.deb
 ```
 
 安装 `.deb` 后可使用短命令：
