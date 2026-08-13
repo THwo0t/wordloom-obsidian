@@ -30,7 +30,7 @@
     "unify:note": "node scripts/unify-note.js",
     "install:command": "npm link",
     "test": "node --test",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js && node --check src/renderer/quick.js && node --check scripts/wordloom-quick.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/services/deepseek.js && node --check src/services/obsidian.js && node --check src/services/vocabulary.js && node --check src/renderer/app.js && node --check src/renderer/quick.js && node --check scripts/wordloom-quick.js && node --check scripts/unify-note.js",
     "pack": "electron-builder --dir",
     "dist:linux": "electron-builder --linux AppImage deb"
   },

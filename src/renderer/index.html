@@ -46,7 +46,12 @@
             <h1>把遇见的词，织进你的词库。</h1>
             <p class="lead">查询权威释义与 CEFR 等级，再由 AI 整理成适合复习的 IELTS 笔记。一键落入 Obsidian，不打断正在做的事。</p>
 
-            <div class="search-panel">
+            <div class="workflow-label first">
+              <div><strong>Cambridge 查询</strong><span>查词、等级和完整详解</span></div>
+              <kbd>Enter</kbd>
+            </div>
+
+            <div class="search-panel" id="dictionary-panel">
               <form class="search-form" id="search-form">
                 <div class="search-wrap">
                   <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
@@ -64,6 +69,34 @@
               </div>
             </div>
 
+            <div class="workflow-label manual">
+              <div><strong>直接插入</strong><span>自己填写词义，DeepSeek 简单校对后只加入总表</span></div>
+              <kbd>Alt + M</kbd>
+            </div>
+
+            <div class="search-panel manual-panel" id="manual-panel">
+              <form id="manual-form">
+                <div class="manual-input-grid">
+                  <div class="manual-input-wrap">
+                    <label for="manual-word">英文原词</label>
+                    <input id="manual-word" autocomplete="off" spellcheck="false" placeholder="例如 sustainable">
+                    <span class="manual-key-hint">Tab ↹</span>
+                  </div>
+                  <div class="manual-input-wrap meaning">
+                    <label for="manual-meaning">中文释义</label>
+                    <input id="manual-meaning" autocomplete="off" placeholder="例如 可持续的">
+                    <span class="manual-key-hint">Enter ↵</span>
+                  </div>
+                  <button class="primary" id="manual-review-button" type="submit">AI 检查并加入</button>
+                </div>
+              </form>
+              <div class="search-meta">
+                <span><i class="status-dot ok"></i>只写入单词总表</span>
+                <span class="dot"></span>
+                <span>不会查询 Cambridge，也不会生成下方详解</span>
+              </div>
+            </div>
+
             <div id="lookup-state" class="state-card">
               <div>
                 <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 8h19a7 7 0 0 1 7 7v25H14a4 4 0 0 1-4-4V8Z"/><path d="M14 31h22M17 16h12M17 22h8"/><path d="m34 6 2 4 4 2-4 2-2 4-2-4-4-2 4-2 2-4Z"/></svg>
@@ -72,6 +105,7 @@
               </div>
             </div>
             <article id="result-card" class="result-card hidden"></article>
+            <article id="manual-result" class="manual-result hidden"></article>
           </div>
         </section>
 
@@ -226,11 +260,13 @@
                   <p class="card-description">全局快捷键在应用进程运行时生效；若希望应用未运行时也能拉起悬浮窗，请把下面的启动命令绑定到系统快捷键。</p>
                   <div class="field"><label for="quick-shortcut">运行时唤起悬浮窗</label><input id="quick-shortcut"></div>
                   <div class="field"><label for="add-shortcut">添加当前查询结果</label><input id="add-shortcut"></div>
+                  <div class="field"><label for="manual-shortcut">打开快速收词</label><input id="manual-shortcut"></div>
                   <div class="field"><label>未运行时的系统命令</label><div id="launch-command" class="note-preview"></div></div>
                   <button class="ghost" id="copy-command">复制启动命令</button>
                   <div class="security-note" id="security-note">正在检测系统凭据存储…</div>
                   <div class="shortcut"><span>查询当前输入</span><code>Enter</code></div>
                   <div class="shortcut"><span>添加到笔记</span><code>Alt + Enter</code></div>
+                  <div class="shortcut"><span>快速收词</span><code id="manual-shortcut-label">Alt + M</code></div>
                   <div class="shortcut"><span>关闭悬浮窗</span><code>Esc</code></div>
                   <div class="shortcut"><span>版本</span><code id="app-version">—</code></div>
                 </section>

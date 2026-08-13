@@ -83,7 +83,7 @@ async function addToNote() {
   button.textContent = response.status === 'duplicate' ? '已存在' : '已加入 ✓';
   toast(response.status === 'duplicate'
     ? '笔记中已有这个词。'
-    : response.checks?.originalUntouched ? '已加入；备份与写后校验通过。' : '已加入笔记。', 'success');
+    : response.checks?.existingContentPreserved ? '已加入；备份与写后校验通过。' : '已加入笔记。', 'success');
 }
 
 async function init() {

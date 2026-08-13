@@ -17,6 +17,7 @@ test('uses short shortcuts and asks new users to choose an IELTS note', async (c
   const settings = await store.load();
   assert.equal(settings.quickShortcut, 'Alt+V');
   assert.equal(settings.addShortcut, 'Alt+Enter');
+  assert.equal(settings.manualShortcut, 'Alt+M');
   assert.equal(settings.notePath, '');
 });
 
@@ -72,4 +73,14 @@ test('fills a missing encrypted key from the legacy app directory without overwr
   assert.equal(settings.endpoint, 'https://current.test');
   assert.equal(settings.notePath, '/current.md');
   assert.equal(store.getApiKey(), 'legacy-secret');
+});
+
+test('saves a configurable manual-entry shortcut', async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'wordloom-manual-shortcut-'));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = new SettingsStore(directory, noEncryption);
+  await store.load();
+  const settings = await store.save({ manualShortcut: 'Alt+N' });
+  assert.equal(settings.manualShortcut, 'Alt+N');
+  assert.equal(JSON.parse(await fs.readFile(path.join(directory, 'settings.json'), 'utf8')).manualShortcut, 'Alt+N');
 });

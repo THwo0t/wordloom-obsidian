@@ -6,6 +6,7 @@ const {
   collectCambridgeUrls,
   extractJson,
   judgeChineseAnswer,
+  reviewManualVocabulary,
   resolveAnthropicMessagesUrl,
   resolveChatUrl,
   selectCambridgeSourceUrl,
@@ -17,6 +18,47 @@ test('resolves OpenAI-compatible chat endpoint', () => {
   assert.equal(resolveChatUrl('https://api.deepseek.com/'), 'https://api.deepseek.com/chat/completions');
   assert.equal(resolveChatUrl('http://localhost:11434/v1/chat/completions'), 'http://localhost:11434/v1/chat/completions');
   assert.throws(() => resolveChatUrl('file:///tmp/key'), /HTTP/);
+});
+
+test('reviews manual vocabulary and returns a minimal correction', async () => {
+  let request;
+  const result = await reviewManualVocabulary(
+    'sustenable',
+    '可持续的',
+    { endpoint: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+    'secret',
+    { fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '{"status":"needs_correction","word":"sustainable","meaning":"可持续的","reason":"英文拼写有误"}' } }] })
+      };
+    } }
+  );
+  assert.deepEqual(result, {
+    status: 'needs_correction',
+    original: { word: 'sustenable', meaning: '可持续的' },
+    suggested: { word: 'sustainable', meaning: '可持续的' },
+    reason: '英文拼写有误'
+  });
+  assert.equal(request.temperature, 0);
+  assert.equal(request.stream, false);
+  assert.match(request.messages[0].content, /不要扩写成词典卡/);
+});
+
+test('keeps a correct manual entry unchanged', async () => {
+  const result = await reviewManualVocabulary(
+    'sustainable',
+    '可持续的',
+    { endpoint: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+    'secret',
+    { fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '{"status":"correct","word":"sustainable","meaning":"可持续的","reason":"词义匹配"}' } }] })
+    }) }
+  );
+  assert.equal(result.status, 'correct');
+  assert.deepEqual(result.original, result.suggested);
 });
 
 test('judges Chinese answers with compact non-streaming JSON', async () => {

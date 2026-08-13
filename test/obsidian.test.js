@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { appendToNote, backupDirectoryFor, collapseWordloomBlocks, collapseWordloomEntries, containsWord, renderTemplate, unifyVocabularyNote } = require('../src/services/obsidian');
+const { appendManualToNote, appendToNote, backupDirectoryFor, collapseWordloomBlocks, collapseWordloomEntries, containsWord, renderTemplate, unifyVocabularyNote } = require('../src/services/obsidian');
 const { buildUnifiedVocabularyDocument, isStrictEnglishAnswer, parseMasterTable } = require('../src/services/vocabulary');
 
 const result = {
@@ -153,6 +153,33 @@ test('strict Chinese-to-English matching accepts listed spellings only', () => {
   assert.equal(isStrictEnglishAnswer('MOLD.', 'mould / mold (n./v.)'), true);
   assert.equal(isStrictEnglishAnswer('molds', 'mould / mold (n./v.)'), false);
   assert.equal(isStrictEnglishAnswer('mitigate the risk', 'mitigate'), false);
+});
+
+test('adds manual vocabulary only to the protected master table and preserves details', async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'wordloom-manual-'));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const notePath = path.join(directory, 'IELTS Words.md');
+  const details = `## Wordloom 新增词汇\n\n<!-- wordloom:mitigate -->\n> [!abstract]- **mitigate** \`verb\` — 减轻\n> complete details\n<!-- /wordloom:mitigate -->\n`;
+  const original = buildUnifiedVocabularyDocument(`# IELTS Words\n\n| Word | Meaning |\n| --- | --- |\n| publicity | 宣传 |\n\n${details}`).text;
+  await fs.writeFile(notePath, original);
+
+  const first = await appendManualToNote(notePath, { word: 'sustainable', meaning: '可持续的' });
+  const updated = await appendManualToNote(notePath, { word: 'sustainable', meaning: '不会耗尽资源的' });
+  const duplicate = await appendManualToNote(notePath, { word: 'sustainable', meaning: '不会耗尽资源的' });
+  const written = await fs.readFile(notePath, 'utf8');
+  const entries = parseMasterTable(written);
+
+  assert.equal(first.status, 'added');
+  assert.equal(updated.status, 'updated');
+  assert.equal(duplicate.status, 'duplicate');
+  assert.equal(written.endsWith(details), true);
+  assert.equal((written.match(/<!-- wordloom:/g) || []).length, 1);
+  assert.deepEqual(entries.find((entry) => entry.word === 'sustainable'), {
+    word: 'sustainable',
+    meaning: '可持续的；不会耗尽资源的'
+  });
+  assert.equal(await fs.readFile(first.backupPath, 'utf8'), original);
+  assert.equal(first.checks.detailedBlocksUntouched, true);
 });
 
 test('rejects unsafe templates before touching an existing note', async (context) => {

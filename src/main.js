@@ -15,8 +15,8 @@ const {
 const {
   fetchCambridgeApi,
 } = require('./services/cambridge');
-const { enrichWithAi, fetchCambridgeViaWebSearch, judgeChineseAnswer, testAiConnection } = require('./services/deepseek');
-const { appendToNote, readNoteSummary, readVocabularyEntries, renderTemplate, unifyVocabularyNote } = require('./services/obsidian');
+const { enrichWithAi, fetchCambridgeViaWebSearch, judgeChineseAnswer, reviewManualVocabulary, testAiConnection } = require('./services/deepseek');
+const { appendManualToNote, appendToNote, readNoteSummary, readVocabularyEntries, renderTemplate, unifyVocabularyNote } = require('./services/obsidian');
 const { SettingsStore } = require('./services/settings');
 
 const isQuickLaunch = process.argv.includes('--quick');
@@ -37,10 +37,11 @@ let quickWindow = null;
 let quickOnlySession = isQuickLaunch;
 let pendingQuickWord = initialQuickWord;
 let settingsStore = null;
-let shortcutRegistration = { quick: false, add: false };
+let shortcutRegistration = { quick: false, add: false, manual: false };
 const lookupControllers = new Map();
 const resultCache = new Map();
 const quizEntryCache = new Map();
+const manualReviewCache = new Map();
 
 function userError(error) {
   if (error?.name === 'AbortError') return { message: '查询已取消。', code: 'CANCELLED' };
@@ -142,9 +143,22 @@ function sendAddShortcut() {
   target?.webContents.send('shortcut:add');
 }
 
+function sendManualShortcut() {
+  quickOnlySession = false;
+  const target = createMainWindow();
+  const send = () => {
+    if (!target || target.isDestroyed()) return;
+    target.show();
+    target.focus();
+    target.webContents.send('shortcut:manual');
+  };
+  if (target.webContents.isLoadingMainFrame()) target.webContents.once('did-finish-load', send);
+  else send();
+}
+
 function registerShortcuts(settings) {
   globalShortcut.unregisterAll();
-  const state = { quick: false, add: false };
+  const state = { quick: false, add: false, manual: false };
   try {
     if (settings.quickShortcut) state.quick = globalShortcut.register(settings.quickShortcut, createQuickWindow);
   } catch {
@@ -154,6 +168,11 @@ function registerShortcuts(settings) {
     if (settings.addShortcut) state.add = globalShortcut.register(settings.addShortcut, sendAddShortcut);
   } catch {
     state.add = false;
+  }
+  try {
+    if (settings.manualShortcut) state.manual = globalShortcut.register(settings.manualShortcut, sendManualShortcut);
+  } catch {
+    state.manual = false;
   }
   shortcutRegistration = state;
   return state;
@@ -272,6 +291,41 @@ function registerIpc() {
       const settings = settingsStore.publicSettings();
       const saved = await appendToNote(settings.notePath, result, { template: settings.template, force: Boolean(force) });
       return { ok: true, ...saved };
+    } catch (error) {
+      return { ok: false, error: userError(error) };
+    }
+  });
+
+  ipcMain.handle('manual:review', async (_event, payload = {}) => {
+    try {
+      const settings = settingsStore.publicSettings();
+      const review = await reviewManualVocabulary(
+        payload.word,
+        payload.meaning,
+        settings,
+        settingsStore.getApiKey()
+      );
+      const reviewId = crypto.randomUUID();
+      manualReviewCache.set(reviewId, review);
+      while (manualReviewCache.size > 30) manualReviewCache.delete(manualReviewCache.keys().next().value);
+      return { ok: true, reviewId, review };
+    } catch (error) {
+      return { ok: false, error: userError(error) };
+    }
+  });
+
+  ipcMain.handle('manual:add', async (_event, payload = {}) => {
+    try {
+      const reviewId = String(payload.reviewId || '');
+      const review = manualReviewCache.get(reviewId);
+      if (!review) throw new Error('校对结果已过期，请重新检查。');
+      const choice = String(payload.choice || '');
+      if (!['original', 'suggested'].includes(choice)) throw new Error('请选择要写入的版本。');
+      const entry = choice === 'suggested' ? review.suggested : review.original;
+      const settings = settingsStore.publicSettings();
+      const saved = await appendManualToNote(settings.notePath, entry);
+      manualReviewCache.delete(reviewId);
+      return { ok: true, choice, ...saved };
     } catch (error) {
       return { ok: false, error: userError(error) };
     }

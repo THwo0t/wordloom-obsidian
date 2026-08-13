@@ -6,9 +6,10 @@ Wordloom 是一款面向 Obsidian 的本地 IELTS 生词采集器。输入单词
 
 - DeepSeek V4 Flash 原生网页搜索，严格限定 Cambridge Dictionary 域名与精确词头
 - 可选 Cambridge Dictionary 官方 API；配置 Access Key 后优先使用授权 XML 接口
-- HTML 主界面与轻量悬浮窗，支持 `Alt+V` 和 `Alt+Enter`
+- HTML 主界面与轻量悬浮窗，支持 `Alt+V`、`Alt+M` 和 `Alt+Enter`
 - Obsidian 原生折叠 Callout：平时每个词只占一行，点击后查看完整词卡
 - 单一编号词表：Wordloom 新词同步写入总表，同时保留后方完整折叠详解
+- 查词页同时显示 Cambridge 查询和“直接插入”：手动填写英文和中文释义，由 DeepSeek 简单校对后只加入总表
 - 内置默写：中译英严格匹配，英译中立即亮出答案并由 AI 后台判分
 - 支持按顺序、随机以及指定词表编号范围出题，状态栏实时显示正确、错误与判分中数量
 - 重复词检测、写前完整备份、并发修改检测、原子替换及写后 SHA-256 校验
@@ -91,6 +92,8 @@ wl mitigate
 > 点击后显示音标、来源、释义、例句、搭配与 IELTS 提示。
 ```
 
+对于不需要查询 Cambridge 的简单词，查词栏下方始终有一条“直接插入”栏：输入英文后按 `Tab` 到中文释义，按 `Enter` 交给 DeepSeek 做简短校对。检查通过时直接加入总表；需要纠正时会先显示原文、建议版本和原因，由用户确认后再写入。这一路径不会创建后方详解。
+
 每次修改现有笔记都会：
 
 1. 验证 UTF-8、frontmatter 与 Wordloom 区块边界。
@@ -104,6 +107,7 @@ wl mitigate
 ## 快捷键
 
 - `Alt+V`：应用运行时显示快速悬浮窗
+- `Alt+M`：打开主界面的快速收词并聚焦英文输入框
 - `Alt+Enter`：把当前查询结果加入笔记
 - `Esc`：关闭独立悬浮窗并退出进程
 

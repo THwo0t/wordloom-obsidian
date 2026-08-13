@@ -7,6 +7,8 @@ const state = {
   activeRequestId: '',
   busy: false,
   launchCommand: '',
+  manualReviewId: '',
+  manualReview: null,
   quiz: {
     library: [],
     questions: [],
@@ -47,6 +49,23 @@ function showView(name) {
   if (name === 'dictation' && !state.quiz.loaded && !state.quiz.loading) loadQuizLibrary();
 }
 
+function showDictionaryOutput() {
+  $('#manual-result').classList.add('hidden');
+  if (state.currentResult) {
+    $('#lookup-state').classList.add('hidden');
+    $('#result-card').classList.remove('hidden');
+  } else {
+    $('#result-card').classList.add('hidden');
+    $('#lookup-state').classList.remove('hidden');
+  }
+}
+
+function showManualOutput() {
+  $('#lookup-state').classList.add('hidden');
+  $('#result-card').classList.add('hidden');
+  $('#manual-result').classList.remove('hidden');
+}
+
 function setBusy(busy) {
   state.busy = busy;
   const button = $('#lookup-button');
@@ -56,6 +75,7 @@ function setBusy(busy) {
 }
 
 function renderLoading(word) {
+  $('#manual-result').classList.add('hidden');
   $('#result-card').classList.add('hidden');
   const panel = $('#lookup-state');
   panel.classList.remove('hidden');
@@ -63,6 +83,7 @@ function renderLoading(word) {
 }
 
 function renderError(message) {
+  $('#manual-result').classList.add('hidden');
   $('#result-card').classList.add('hidden');
   const panel = $('#lookup-state');
   panel.classList.remove('hidden');
@@ -75,6 +96,7 @@ function unique(values) {
 }
 
 function renderResult(result, aiWarning = '') {
+  $('#manual-result').classList.add('hidden');
   const parts = unique(result.entries.map((entry) => entry.partOfSpeech));
   const levelChips = result.levels.map((level) => `<span class="chip level">${escapeHtml(level)}</span>`).join('');
   const partChips = parts.map((part) => `<span class="chip">${escapeHtml(part)}</span>`).join('');
@@ -201,6 +223,7 @@ function collectSettings() {
     useAi: $('#use-ai').checked,
     quickShortcut: $('#quick-shortcut').value.trim(),
     addShortcut: $('#add-shortcut').value.trim(),
+    manualShortcut: $('#manual-shortcut').value.trim(),
     ...($('#api-key').value.trim() ? { apiKey: $('#api-key').value.trim() } : {}),
     ...($('#cambridge-api-key').value.trim() ? { cambridgeApiKey: $('#cambridge-api-key').value.trim() } : {})
   };
@@ -215,6 +238,8 @@ function hydrateSettings(settings) {
   $('#use-ai').checked = Boolean(settings.useAi);
   $('#quick-shortcut').value = settings.quickShortcut || '';
   $('#add-shortcut').value = settings.addShortcut || '';
+  $('#manual-shortcut').value = settings.manualShortcut || '';
+  $('#manual-shortcut-label').textContent = (settings.manualShortcut || 'Alt+M').replace(/\+/g, ' + ');
   $('#api-key').value = '';
   $('#cambridge-api-key').value = '';
   $('#key-hint').textContent = settings.hasApiKey ? '已保存一个 Key；留空表示继续使用。' : '尚未保存 Key；Key 不会回显。';
@@ -242,11 +267,103 @@ async function saveSettings() {
   button.textContent = '保存设置';
   if (!response.ok) return toast(response.error.message, 'error');
   hydrateSettings(response.settings);
-  if (response.shortcuts && (!response.shortcuts.quick || !response.shortcuts.add)) {
+  if (response.shortcuts && (!response.shortcuts.quick || !response.shortcuts.add || !response.shortcuts.manual)) {
     toast('设置已保存，但有快捷键被系统占用，请换一组组合键。');
   } else {
     toast('设置已保存。', 'success');
   }
+}
+
+function setManualBusy(busy) {
+  $('#manual-word').disabled = busy;
+  $('#manual-meaning').disabled = busy;
+  const button = $('#manual-review-button');
+  button.disabled = busy;
+  button.innerHTML = busy ? '<span class="spinner"></span>检查中' : 'AI 检查并加入';
+}
+
+function renderManualReview(review) {
+  state.manualReview = review;
+  const changed = review.status === 'needs_correction';
+  const card = $('#manual-result');
+  card.innerHTML = changed ? `
+    <header class="manual-result-head"><h2>DeepSeek 建议纠正</h2><span class="result-pill pending">写入前确认</span></header>
+    <div class="manual-review-body">
+      <div class="manual-comparison">
+        <div class="manual-version"><span>你的输入</span><strong>${escapeHtml(review.original.word)}</strong><p>${escapeHtml(review.original.meaning)}</p></div>
+        <div class="manual-version recommended"><span>建议版本</span><strong>${escapeHtml(review.suggested.word)}</strong><p>${escapeHtml(review.suggested.meaning)}</p></div>
+      </div>
+      <p class="manual-reason">${escapeHtml(review.reason)}</p>
+      <div class="manual-actions"><button class="ghost" id="manual-keep-original">保留原文加入</button><button class="primary" id="manual-use-suggestion">采用纠正并加入</button></div>
+    </div>` : `
+    <header class="manual-result-head"><h2>检查通过</h2><span class="result-pill correct">含义匹配</span></header>
+    <div class="manual-review-body">
+      <div class="manual-version recommended"><span>将写入单词总表</span><strong>${escapeHtml(review.original.word)}</strong><p>${escapeHtml(review.original.meaning)}</p></div>
+      <p class="manual-reason">${escapeHtml(review.reason)}</p>
+      <div class="manual-actions"><button class="ghost" id="manual-edit">返回修改</button><button class="primary" id="manual-add-original">确认加入</button></div>
+    </div>`;
+  showManualOutput();
+  $('#manual-keep-original')?.addEventListener('click', () => addManualEntry('original'));
+  $('#manual-use-suggestion')?.addEventListener('click', () => addManualEntry('suggested'));
+  $('#manual-add-original')?.addEventListener('click', () => addManualEntry('original'));
+  $('#manual-edit')?.addEventListener('click', resetManualResult);
+}
+
+function resetManualResult({ clear = false } = {}) {
+  state.manualReviewId = '';
+  state.manualReview = null;
+  $('#manual-result').classList.add('hidden');
+  $('#manual-result').innerHTML = '';
+  if (clear) {
+    $('#manual-word').value = '';
+    $('#manual-meaning').value = '';
+  }
+  showDictionaryOutput();
+  setTimeout(() => $('#manual-word').focus(), 0);
+}
+
+async function reviewManualEntry() {
+  const word = $('#manual-word').value.trim();
+  const meaning = $('#manual-meaning').value.trim();
+  if (!word) return toast('先输入英文原词。', 'error');
+  if (!meaning) return toast('再填写中文释义。', 'error');
+  if (!state.settings.notePath) {
+    toast('请先在设置中选择 IELTS Words 笔记。', 'error');
+    return showView('settings');
+  }
+  setManualBusy(true);
+  const response = await window.wordloom.reviewManual(word, meaning);
+  setManualBusy(false);
+  if (!response.ok) return toast(response.error.message, 'error');
+  state.manualReviewId = response.reviewId;
+  if (response.review.status === 'correct') {
+    state.manualReview = response.review;
+    return addManualEntry('original');
+  }
+  renderManualReview(response.review);
+  toast('DeepSeek 发现需要确认的纠正。');
+}
+
+async function addManualEntry(choice) {
+  if (!state.manualReviewId) return toast('请先让 DeepSeek 检查。', 'error');
+  const pendingReview = state.manualReview;
+  const buttons = $$('.manual-actions button');
+  buttons.forEach((button) => { button.disabled = true; });
+  $('#manual-result').innerHTML = '<div class="manual-success"><span class="spinner" style="border-color:rgba(23,91,67,.18);border-top-color:#175b43"></span><h2 style="margin-top:16px">正在安全写入总表</h2><p>会先备份并检查已有详解没有变化。</p></div>';
+  showManualOutput();
+  const response = await window.wordloom.addManual(state.manualReviewId, choice);
+  if (!response.ok) {
+    renderManualReview(pendingReview);
+    toast(response.error.message, 'error');
+    return;
+  }
+  state.manualReviewId = '';
+  state.manualReview = { saved: true };
+  const duplicate = response.status === 'duplicate';
+  $('#manual-result').innerHTML = `<div class="manual-success"><h2>${escapeHtml(response.word)} ${duplicate ? '已在总表中' : '已加入'}</h2><p>${escapeHtml(response.meaning)}</p><button class="primary" id="manual-add-another">继续收词</button></div>`;
+  $('#manual-add-another').addEventListener('click', () => resetManualResult({ clear: true }));
+  toast(duplicate ? '总表中已有相同词义，没有重复写入。' : response.status === 'updated' ? '已把新释义合并到原词条。' : '已加入单词总表；下方详解没有变化。', 'success');
+  state.quiz.loaded = false;
 }
 
 async function testApi() {
@@ -493,6 +610,7 @@ function wireEvents() {
   $('#test-api').addEventListener('click', testApi);
   $('#choose-note').addEventListener('click', chooseNote);
   $('#inspect-note').addEventListener('click', inspectNote);
+  $('#manual-form').addEventListener('submit', (event) => { event.preventDefault(); reviewManualEntry(); });
   $('#unify-note').addEventListener('click', unifyNote);
   $('#quiz-reload').addEventListener('click', loadQuizLibrary);
   $('#quiz-start').addEventListener('click', startQuiz);
@@ -525,12 +643,18 @@ function wireEvents() {
       event.preventDefault();
       addCurrentToNote();
     }
+    if (event.altKey && event.key.toLocaleLowerCase('en-US') === 'm') {
+      event.preventDefault();
+      showView('lookup');
+      setTimeout(() => $('#manual-word').focus(), 0);
+    }
     if (event.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
       event.preventDefault();
       showView('lookup');
     }
   });
   window.wordloom.onAddShortcut(() => addCurrentToNote());
+  window.wordloom.onManualShortcut(() => { showView('lookup'); setTimeout(() => $('#manual-word').focus(), 0); });
   window.wordloom.onFocusSearch(() => { showView('lookup'); $('#word-input').focus(); });
 }
 
@@ -542,7 +666,7 @@ async function init() {
   hydrateSettings(response.settings);
   $('#launch-command').textContent = response.quickLaunchCommand;
   $('#app-version').textContent = response.version;
-  if (!response.shortcuts?.quick || !response.shortcuts?.add) {
+  if (!response.shortcuts?.quick || !response.shortcuts?.add || !response.shortcuts?.manual) {
     toast('有快捷键被系统占用，请在设置中换一个按键。');
   }
 }

@@ -11,7 +11,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   template: DEFAULT_TEMPLATE,
   useAi: true,
   quickShortcut: 'Alt+V',
-  addShortcut: 'Alt+Enter'
+  addShortcut: 'Alt+Enter',
+  manualShortcut: 'Alt+M'
 });
 
 const LEGACY_SHORTCUTS = Object.freeze({
@@ -26,7 +27,8 @@ const EDITABLE_KEYS = new Set([
   'template',
   'useAi',
   'quickShortcut',
-  'addShortcut'
+  'addShortcut',
+  'manualShortcut'
 ]);
 
 class SettingsStore {

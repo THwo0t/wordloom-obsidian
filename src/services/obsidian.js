@@ -10,6 +10,7 @@ const {
   briefMeaningFromResult,
   buildUnifiedVocabularyDocument,
   masterTableRange,
+  mergeEntries,
   parseMasterTable,
   publicQuizEntries,
   updateMasterTable,
@@ -329,15 +330,7 @@ function buildAppendage(currentText, block) {
   return `${separator}${needsHeading ? `${PROTECTED_SECTION_HEADING}\n\n` : ''}${block}\n`;
 }
 
-function validateTransition(currentText, nextText, tableUpdate, appendage, blockInfo, result) {
-  const expected = `${tableUpdate.text}${appendage}`;
-  if (nextText !== expected) {
-    throw new NoteProtectionError('双写内容与预期不一致，已停止替换原笔记。', 'TRANSITION_MISMATCH');
-  }
-  if (!nextText.endsWith(appendage) || !appendage.includes(`<!-- wordloom:${blockInfo.id} -->`)) {
-    throw new NoteProtectionError('新增详解区块校验失败，已停止写入。', 'APPEND_CHECK_FAILED');
-  }
-
+function validateMasterTableUpdate(currentText, tableUpdate, entry) {
   const beforeRange = masterTableRange(currentText);
   const afterRange = masterTableRange(tableUpdate.text);
   if (!afterRange) throw new NoteProtectionError('单词总表边界缺失，已停止写入。', 'MASTER_TABLE_MISSING');
@@ -351,8 +344,9 @@ function validateTransition(currentText, nextText, tableUpdate, appendage, block
     throw new NoteProtectionError('创建单词总表时未完整保留原文，已停止写入。', 'ORIGINAL_CONTENT_CHANGED');
   }
 
-  const key = vocabularyKey(result.query);
-  if (!parseMasterTable(tableUpdate.text).some((entry) => vocabularyKey(entry.word) === key)) {
+  const key = vocabularyKey(entry.word);
+  const writtenEntry = parseMasterTable(tableUpdate.text).find((item) => vocabularyKey(item.word) === key);
+  if (!writtenEntry || !writtenEntry.meaning.includes(entry.meaning)) {
     throw new NoteProtectionError('新增词没有写入单词总表，已停止写入。', 'TABLE_ENTRY_MISSING');
   }
   for (const block of currentText.match(WORDLOOM_BLOCK_PATTERN) || []) {
@@ -361,6 +355,20 @@ function validateTransition(currentText, nextText, tableUpdate, appendage, block
     }
   }
   return true;
+}
+
+function validateTransition(currentText, nextText, tableUpdate, appendage, blockInfo, result) {
+  const expected = `${tableUpdate.text}${appendage}`;
+  if (nextText !== expected) {
+    throw new NoteProtectionError('双写内容与预期不一致，已停止替换原笔记。', 'TRANSITION_MISMATCH');
+  }
+  if (!nextText.endsWith(appendage) || !appendage.includes(`<!-- wordloom:${blockInfo.id} -->`)) {
+    throw new NoteProtectionError('新增详解区块校验失败，已停止写入。', 'APPEND_CHECK_FAILED');
+  }
+  return validateMasterTableUpdate(currentText, tableUpdate, {
+    word: result.query,
+    meaning: briefMeaningFromResult(result)
+  });
 }
 
 async function writeReceipt(backupPath, receipt) {
@@ -564,6 +572,106 @@ function appendToNote(notePath, result, { template = DEFAULT_TEMPLATE, force = f
   return queued;
 }
 
+function appendManualToNote(notePath, entry) {
+  const operation = async () => {
+    const resolved = validateNotePath(notePath);
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+
+    let currentBuffer;
+    let existed = true;
+    let noteStat;
+    try {
+      [currentBuffer, noteStat] = await Promise.all([fs.readFile(resolved), fs.stat(resolved)]);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      existed = false;
+      currentBuffer = Buffer.from('---\ntags:\n  - IELTS\n  - vocabulary\ncssclasses:\n  - ielts-words\n---\n\n# IELTS words\n', 'utf8');
+      noteStat = { mode: 0o600 };
+    }
+
+    const before = validateExistingNote(currentBuffer, resolved);
+    const current = currentBuffer.toString('utf8');
+    const rawEntry = {
+      word: String(entry?.word || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 160),
+      meaning: String(entry?.meaning || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 600)
+    };
+    if (!rawEntry.word || !/[A-Za-z]/u.test(rawEntry.word) || /[<>|]/u.test(rawEntry.word)) {
+      throw new NoteProtectionError('英文词条无法安全写入单词总表。', 'INVALID_MANUAL_WORD');
+    }
+    if (!rawEntry.meaning || /[<>]/u.test(rawEntry.meaning)) {
+      throw new NoteProtectionError('中文释义无法安全写入单词总表。', 'INVALID_MANUAL_MEANING');
+    }
+    const safeEntry = mergeEntries([rawEntry])[0];
+    if (!safeEntry) throw new NoteProtectionError('快速收词内容为空，已停止写入。', 'INVALID_MANUAL_ENTRY');
+
+    const currentEntry = parseMasterTable(current).find((item) => vocabularyKey(item.word) === vocabularyKey(safeEntry.word));
+    if (currentEntry?.meaning.includes(safeEntry.meaning)) {
+      return {
+        status: 'duplicate',
+        path: resolved,
+        word: safeEntry.word,
+        meaning: safeEntry.meaning,
+        checks: { originalHash: before.hash, existingContentPreserved: true, markersBalanced: true }
+      };
+    }
+
+    const tableUpdate = updateMasterTable(current, safeEntry);
+    validateMasterTableUpdate(current, tableUpdate, safeEntry);
+    const nextBuffer = Buffer.from(tableUpdate.text, 'utf8');
+    validateExistingNote(nextBuffer, resolved);
+
+    if (existed) {
+      const latestBuffer = await fs.readFile(resolved);
+      if (!latestBuffer.equals(currentBuffer)) {
+        throw new NoteProtectionError('Obsidian 在写入前修改了笔记。本次操作已取消，请重试。', 'CONCURRENT_EDIT');
+      }
+    }
+    const backupPath = existed ? await createBackup(resolved, currentBuffer, noteStat.mode, before.hash) : '';
+    await atomicReplace(resolved, nextBuffer, noteStat.mode);
+    const writtenBuffer = await fs.readFile(resolved);
+    if (!writtenBuffer.equals(nextBuffer)) {
+      throw new NoteProtectionError('快速收词写后内容不一致；原始备份已保留。', 'POST_WRITE_MISMATCH', { backupPath });
+    }
+    const after = validateExistingNote(writtenBuffer, resolved);
+    validateMasterTableUpdate(current, { ...tableUpdate, text: writtenBuffer.toString('utf8') }, safeEntry);
+
+    const checks = {
+      backupCreated: Boolean(backupPath),
+      existingContentPreserved: true,
+      masterTableUpdated: true,
+      detailedBlocksUntouched: true,
+      originalHash: before.hash,
+      resultHash: after.hash,
+      markersBalanced: after.markersBalanced
+    };
+    let receiptPath = '';
+    if (backupPath) {
+      receiptPath = await writeReceipt(backupPath, {
+        version: 1,
+        operation: 'append-manual-vocabulary',
+        writtenAt: new Date().toISOString(),
+        notePath: resolved,
+        word: safeEntry.word,
+        backupPath,
+        checks
+      }).catch(() => '');
+    }
+    return {
+      status: tableUpdate.existed ? 'updated' : 'added',
+      path: resolved,
+      word: safeEntry.word,
+      meaning: safeEntry.meaning,
+      backupPath,
+      receiptPath,
+      checks
+    };
+  };
+
+  const queued = writeQueue.then(operation, operation);
+  writeQueue = queued.catch(() => {});
+  return queued;
+}
+
 function unifyVocabularyNote(notePath, { sourceText = '' } = {}) {
   const operation = async () => {
     const resolved = validateNotePath(notePath);
@@ -697,6 +805,7 @@ module.exports = {
   LEGACY_EXPANDED_TEMPLATE,
   NoteProtectionError,
   PROTECTED_SECTION_HEADING,
+  appendManualToNote,
   appendToNote,
   backupDirectoryFor,
   collapseWordloomBlocks,

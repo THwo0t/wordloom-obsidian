@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('wordloom', {
   lookup: (word, requestId) => ipcRenderer.invoke('lookup:word', { word, requestId }),
   cancelLookup: (requestId) => ipcRenderer.send('lookup:cancel', requestId),
   addToNote: (resultId, force = false) => ipcRenderer.invoke('note:add', { resultId, force }),
+  reviewManual: (word, meaning) => ipcRenderer.invoke('manual:review', { word, meaning }),
+  addManual: (reviewId, choice) => ipcRenderer.invoke('manual:add', { reviewId, choice }),
   previewMarkdown: (resultId, template) => ipcRenderer.invoke('note:preview', { resultId, template }),
   inspectNote: (notePath) => ipcRenderer.invoke('note:inspect', notePath),
   unifyNote: (notePath) => ipcRenderer.invoke('note:unify', notePath),
@@ -29,6 +31,7 @@ contextBridge.exposeInMainWorld('wordloom', {
   windowAction: (action) => ipcRenderer.send('window:action', action),
   openMain: () => ipcRenderer.send('window:open-main'),
   onAddShortcut: (callback) => on('shortcut:add', callback),
+  onManualShortcut: (callback) => on('shortcut:manual', callback),
   onFocusSearch: (callback) => on('shortcut:focus-search', callback),
   onQuickLookup: (callback) => on('quick:lookup', callback)
 });
