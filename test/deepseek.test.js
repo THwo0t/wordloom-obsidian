@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {
   collectCambridgeUrls,
   extractJson,
+  judgeChineseAnswer,
   resolveAnthropicMessagesUrl,
   resolveChatUrl,
   selectCambridgeSourceUrl,
@@ -16,6 +17,27 @@ test('resolves OpenAI-compatible chat endpoint', () => {
   assert.equal(resolveChatUrl('https://api.deepseek.com/'), 'https://api.deepseek.com/chat/completions');
   assert.equal(resolveChatUrl('http://localhost:11434/v1/chat/completions'), 'http://localhost:11434/v1/chat/completions');
   assert.throws(() => resolveChatUrl('file:///tmp/key'), /HTTP/);
+});
+
+test('judges Chinese answers with compact non-streaming JSON', async () => {
+  let request;
+  const result = await judgeChineseAnswer(
+    { word: 'mitigate', meaning: '减轻；缓和' },
+    '让危害变小',
+    { endpoint: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+    'secret',
+    { fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '{"correct":true,"feedback":"含义相符"}' } }] })
+      };
+    } }
+  );
+  assert.deepEqual(result, { correct: true, feedback: '含义相符' });
+  assert.equal(request.stream, false);
+  assert.equal(request.temperature, 0);
+  assert.match(request.messages[1].content, /让危害变小/);
 });
 
 test('accepts plain and fenced JSON responses', () => {

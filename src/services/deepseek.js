@@ -385,12 +385,82 @@ async function testAiConnection(settings, apiKey, { fetchImpl = globalThis.fetch
   return { ok: true, model: settings.model };
 }
 
+async function judgeChineseAnswer(entry, answer, settings, apiKey, { signal, fetchImpl = globalThis.fetch } = {}) {
+  if (!apiKey) throw new AiServiceError('尚未配置 API Key，无法进行英译中 AI 判分。', 'MISSING_KEY');
+  const endpoint = resolveChatUrl(settings.endpoint);
+  const model = String(settings.model || '').trim();
+  if (!model) throw new AiServiceError('请先填写模型名称。', 'MISSING_MODEL');
+  const word = limitedText(entry?.word, 160);
+  const standard = limitedText(entry?.meaning, 1200);
+  const responseText = limitedText(answer, 1200);
+  if (!responseText) return { correct: false, feedback: '未填写答案。' };
+
+  let response;
+  try {
+    const timeoutSignal = AbortSignal.timeout(18_000);
+    const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    response = await fetchImpl(endpoint, {
+      method: 'POST',
+      signal: requestSignal,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              '你是 IELTS 词汇默写判分器。判断学生的中文回答是否覆盖给定英文词条的至少一个核心中文义项。',
+              '同义改写、近义中文和语序差异可以判对；意思相反、答非所问或只有模糊相关词应判错。',
+              '不要要求逐字一致。只返回 JSON：{"correct":true或false,"feedback":"不超过30字的中文说明"}。'
+            ].join('\n')
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({ word, standardAnswer: standard, studentAnswer: responseText })
+          }
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0,
+        max_tokens: 120,
+        stream: false
+      })
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+      throw new AiServiceError('AI 判分超时，本题暂不计入对错。', 'TIMEOUT', error);
+    }
+    throw new AiServiceError('AI 判分暂时无法连接，本题暂不计入对错。', 'NETWORK_ERROR', error);
+  }
+
+  if (!response.ok) {
+    throw new AiServiceError(`AI 判分请求失败（HTTP ${response.status}），本题暂不计入对错。`, 'HTTP_ERROR');
+  }
+  let body;
+  try {
+    body = await response.json();
+  } catch (error) {
+    throw new AiServiceError('AI 判分返回格式无效，本题暂不计入对错。', 'INVALID_RESPONSE', error);
+  }
+  const judged = extractJson(body?.choices?.[0]?.message?.content);
+  if (typeof judged?.correct !== 'boolean') {
+    throw new AiServiceError('AI 判分结果缺少对错字段，本题暂不计入对错。', 'INVALID_RESPONSE');
+  }
+  return {
+    correct: judged.correct,
+    feedback: limitedText(judged.feedback, 100) || (judged.correct ? '含义匹配。' : '没有匹配核心含义。')
+  };
+}
+
 module.exports = {
   AiServiceError,
   collectCambridgeUrls,
   enrichWithAi,
   extractJson,
   fetchCambridgeViaWebSearch,
+  judgeChineseAnswer,
   resolveChatUrl,
   resolveAnthropicMessagesUrl,
   selectCambridgeSourceUrl,
